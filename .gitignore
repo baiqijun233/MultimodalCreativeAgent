@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.local_demo/
+06_Tests/resume_v8_review/
+04_Data/local_demo_check_*/
+07_Logs/*backup*.md
+07_Logs/*backup*.py
