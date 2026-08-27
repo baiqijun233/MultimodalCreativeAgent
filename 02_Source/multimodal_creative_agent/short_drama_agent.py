@@ -4,8 +4,9 @@ The model adapter is intentionally injectable. Production code can replace it
 with a VLM/LLM client without changing orchestration or persistence logic.
 """
 
-from __future__ import annotations
-
+import asyncio
+import os
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -68,12 +69,13 @@ class DeterministicModel:
 class ShortDramaAgent:
     STAGES = ("analyze", "plan", "validate", "assets", "finalize")
 
-    def __init__(self, store: TaskStore | None = None, model: ModelAdapter | None = None, max_retries: int = 2, asset_store: LocalAssetStore | None = None, event_bus: InMemoryEventBus | None = None) -> None:
+    def __init__(self, store: TaskStore | None = None, model: ModelAdapter | None = None, max_retries: int = 2, asset_store: LocalAssetStore | None = None, event_bus: InMemoryEventBus | None = None, state_cache: Any | None = None) -> None:
         self.store = store or TaskStore()
         self.model = model or DeterministicModel()
         self.max_retries = max(0, int(max_retries))
         self.asset_store = asset_store
         self.event_bus = event_bus or InMemoryEventBus()
+        self.state_cache = state_cache
 
     def create_task(self, request: str, constraints: list[str] | None = None) -> TaskRecord:
         if not isinstance(request, str) or not request.strip():
@@ -184,6 +186,8 @@ class ShortDramaAgent:
     def _save(self, original: TaskRecord, status: str, state: dict[str, Any]) -> TaskRecord:
         updated = TaskRecord(original.task_id, original.task_type, status, state, utc_now())
         self.store.save(updated)
+        if self.state_cache is not None:
+            self.state_cache.set(updated.task_id, {"status": updated.status, **updated.state})
         return updated
 
     def _record_event(self, task_id: str, state: dict[str, Any], event_type: str, payload: dict[str, Any]) -> None:
@@ -194,7 +198,7 @@ class ShortDramaAgent:
 def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     """Optional FastAPI adapter; imported only when the dependency is present."""
     try:
-        from fastapi import FastAPI, HTTPException
+        from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
         from pydantic import BaseModel
     except ImportError as exc:
         raise RuntimeError("安装 fastapi 和 pydantic 后才能启用 HTTP 接口") from exc
@@ -242,5 +246,33 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
             return runner.submit(body.request, body.constraints).__dict__
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok", "service": "multimodal-creative-agent"}
+
+    @app.websocket("/ws/tasks/{task_id}")
+    async def task_websocket(websocket: WebSocket, task_id: str):
+        await websocket.accept()
+        if agent.store.get(task_id) is None:
+            await websocket.close(code=4404, reason="任务不存在")
+            return
+        sent = 0
+        timeout_seconds = max(5.0, float(os.getenv("WEBSOCKET_TASK_TIMEOUT_SECONDS", "120")))
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            while time.monotonic() < deadline:
+                events = agent.event_bus.list_events(task_id)
+                for event in events[sent:]:
+                    await websocket.send_json(event)
+                sent = len(events)
+                record = agent.store.get(task_id)
+                if record is not None and record.status in {"succeeded", "failed"}:
+                    await websocket.send_json({"type": "task_snapshot", "payload": record.__dict__})
+                    return
+                await asyncio.sleep(0.25)
+            await websocket.send_json({"type": "timeout", "payload": {"task_id": task_id}})
+        except WebSocketDisconnect:
+            return
 
     return app

@@ -10,6 +10,9 @@ from common.storage import TaskStore
 from common.assets import LocalAssetStore
 from common.events import InMemoryEventBus
 from async_runner import AsyncTaskRunner
+from integrations.artclaw import ArtClawClient, ArtClawConfig
+from integrations.redis_backend import _redis_client
+from short_drama_agent import create_fastapi_app
 from short_drama_agent import ShortDramaAgent
 
 
@@ -39,6 +42,31 @@ class AlwaysFailModel:
         from short_drama_agent import DeterministicModel
 
         return DeterministicModel().generate(stage, payload)
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        import json
+
+        return json.dumps(self.payload).encode("utf-8")
+
+
+class FakeOpener:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, request, timeout):
+        self.calls.append((request, timeout))
+        return FakeResponse({"job_id": "job-demo"})
 
 
 class ShortDramaAgentTests(unittest.TestCase):
@@ -112,6 +140,57 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertEqual(finished.status, "succeeded")
         runner.close()
         store.close()
+
+    def test_artclaw_client_blocks_paid_submit_by_default(self):
+        import os
+
+        opener = FakeOpener()
+        os.environ["ARTCLAW_TEST_KEY"] = "test-only-key"
+        client = ArtClawClient(ArtClawConfig(api_key_env="ARTCLAW_TEST_KEY"), opener=opener)
+        with self.assertRaises(PermissionError):
+            client.submit_video("生成一个镜头")
+        self.assertEqual(opener.calls, [])
+        result = client.submit_video("生成一个镜头", duration_seconds=4, allow_paid=True)
+        self.assertEqual(result["job_id"], "job-demo")
+        self.assertEqual(len(opener.calls), 1)
+        del os.environ["ARTCLAW_TEST_KEY"]
+
+    def test_fastapi_routes_are_registered_without_external_services(self):
+        agent = ShortDramaAgent(store=TaskStore())
+        app = create_fastapi_app(agent)
+        paths = {route.path for route in app.routes}
+        self.assertIn("/health", paths)
+        self.assertIn("/tasks/{task_id}/events", paths)
+        self.assertIn("/ws/tasks/{task_id}", paths)
+        health = next(route for route in app.routes if route.path == "/health")
+        self.assertEqual(health.endpoint()["status"], "ok")
+
+    def test_redis_adapter_reports_missing_configuration(self):
+        import os
+
+        old = os.environ.pop("REDIS_URL", None)
+        try:
+            with self.assertRaises(RuntimeError):
+                _redis_client()
+        finally:
+            if old is not None:
+                os.environ["REDIS_URL"] = old
+
+    def test_celery_factory_reports_missing_configuration(self):
+        import os
+
+        old_broker = os.environ.pop("CELERY_BROKER_URL", None)
+        old_redis = os.environ.pop("REDIS_URL", None)
+        try:
+            from celery_worker import create_celery_app
+
+            with self.assertRaises(RuntimeError):
+                create_celery_app()
+        finally:
+            if old_broker is not None:
+                os.environ["CELERY_BROKER_URL"] = old_broker
+            if old_redis is not None:
+                os.environ["REDIS_URL"] = old_redis
 
 
 if __name__ == "__main__":
