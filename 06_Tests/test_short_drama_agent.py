@@ -155,6 +155,12 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertEqual(len(opener.calls), 1)
         del os.environ["ARTCLAW_TEST_KEY"]
 
+    def test_artclaw_config_uses_low_cost_defaults(self):
+        config = ArtClawConfig()
+        self.assertEqual(config.resolution, "480p")
+        self.assertFalse(config.generate_audio)
+        self.assertEqual(config.aspect_ratio, "9:16")
+
     def test_fastapi_routes_are_registered_without_external_services(self):
         agent = ShortDramaAgent(store=TaskStore())
         app = create_fastapi_app(agent)

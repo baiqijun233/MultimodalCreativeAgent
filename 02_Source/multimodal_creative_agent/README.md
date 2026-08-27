@@ -32,4 +32,4 @@ docker compose -f 02_Source\docker-compose.yml up --build
 
 启动后默认可访问 `http://localhost:8001/health`，WebSocket 地址为 `ws://localhost:8001/ws/tasks/{task_id}`；如需其他端口可设置 `API_PORT`。不需要 Redis 时，直接运行 `demo.py` 仍使用 SQLite、线程池和本地资产目录。
 
-ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）环境变量读取，禁止写入代码、`.env`、日志或 Git。
+ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）环境变量读取，禁止写入代码、`.env`、日志或 Git。默认采用低成本测试参数：4 秒、480p、9:16、关闭音频；可用 `ARTCLAW_MODEL`、`ARTCLAW_RESOLUTION`、`ARTCLAW_ASPECT_RATIO`、`ARTCLAW_GENERATE_AUDIO` 覆盖。真实提交必须显式传入 `allow_paid=True`。

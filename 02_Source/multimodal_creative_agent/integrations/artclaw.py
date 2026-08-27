@@ -14,6 +14,9 @@ from urllib.request import Request, urlopen
 class ArtClawConfig:
     base_url: str = "https://artclaw.com/api/v1"
     model: str = "doubao-seedance-2-0-260128"
+    aspect_ratio: str = "9:16"
+    resolution: str = "480p"
+    generate_audio: bool = False
     api_key_env: str = "ARTCLAW_API_KEY_ACCOUNT_A"
     timeout_seconds: float = 30.0
 
@@ -26,9 +29,15 @@ class ArtClawConfig:
             raise ValueError("ARTCLAW_TIMEOUT_SECONDS 必须是数字") from exc
         if timeout_value <= 0:
             raise ValueError("ARTCLAW_TIMEOUT_SECONDS 必须大于 0")
+        generate_audio = os.getenv("ARTCLAW_GENERATE_AUDIO", "false").strip().lower()
+        if generate_audio not in {"true", "false", "1", "0", "yes", "no"}:
+            raise ValueError("ARTCLAW_GENERATE_AUDIO 必须是 true 或 false")
         return cls(
             base_url=os.getenv("ARTCLAW_BASE_URL", cls.base_url).rstrip("/"),
             model=os.getenv("ARTCLAW_MODEL", cls.model),
+            aspect_ratio=os.getenv("ARTCLAW_ASPECT_RATIO", cls.aspect_ratio),
+            resolution=os.getenv("ARTCLAW_RESOLUTION", cls.resolution),
+            generate_audio=generate_audio in {"true", "1", "yes"},
             api_key_env=os.getenv("ARTCLAW_API_KEY_ENV", cls.api_key_env),
             timeout_seconds=timeout_value,
         )
@@ -74,7 +83,7 @@ class ArtClawClient:
     def account_info(self) -> dict[str, Any]:
         return self._request("GET", "/account/info")
 
-    def submit_video(self, prompt: str, reference_urls: list[str] | None = None, *, duration_seconds: int = 5, allow_paid: bool = False) -> dict[str, Any]:
+    def submit_video(self, prompt: str, reference_urls: list[str] | None = None, *, duration_seconds: int = 4, allow_paid: bool = False) -> dict[str, Any]:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt 必须是非空字符串")
         if not isinstance(duration_seconds, int) or not 4 <= duration_seconds <= 15:
@@ -84,6 +93,10 @@ class ArtClawClient:
             raise ValueError("reference_urls 必须是非空字符串列表")
         if len(references) > 9:
             raise ValueError("reference_urls 最多 9 项")
+        if self.config.aspect_ratio not in {"1:1", "4:3", "3:4", "16:9", "9:16"}:
+            raise ValueError("aspect_ratio 必须是支持的标准画幅")
+        if self.config.resolution not in {"480p", "720p", "1080p"}:
+            raise ValueError("resolution 必须是 480p、720p 或 1080p")
         if not allow_paid:
             raise PermissionError("已阻止可能产生费用的 ArtClaw 提交；显式传入 allow_paid=True 后才会提交")
         return self._request(
@@ -94,9 +107,9 @@ class ArtClawClient:
                 "prompt": prompt.strip(),
                 "reference_urls": references,
                 "duration": duration_seconds,
-                "aspect_ratio": "9:16",
-                "resolution": "720p",
-                "generate_audio": True,
+                "aspect_ratio": self.config.aspect_ratio,
+                "resolution": self.config.resolution,
+                "generate_audio": self.config.generate_audio,
                 "online_search": False,
             },
         )
