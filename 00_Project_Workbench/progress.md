@@ -26,7 +26,7 @@
 - 新增 ArtClaw HTTP 客户端，支持账户查询、视频任务提交、任务查询和计费提交保护。
 - 新增 Redis 状态缓存/事件总线、Celery worker、FastAPI WebSocket 推送与统一运行时配置。
 - 新增 Dockerfile、Docker Compose 本地 Redis/API/worker 编排和可选依赖清单。
-- 测试扩展至 9 项并全部通过；未连接真实 Redis、Celery worker 或 ArtClaw 计费接口，避免未经确认产生外部费用。
+- 测试扩展至 10 项并全部通过；ArtClaw 计费接口未执行，避免未经确认产生外部费用。
 - Docker 已安装并验证：镜像构建成功，Redis 健康，Celery worker 注册并消费 `creative.run_task`，API 因本机 8000 被占用改用 `8001`。
 - 容器端到端任务成功：五阶段完成、Redis 事件 11 条、资产数 3；WebSocket 客户端收到阶段事件和最终快照。
 - ArtClaw 仍只读取环境变量，未执行真实计费提交；AWS S3 按约定跳过，本地资产存储保持为默认实现。
