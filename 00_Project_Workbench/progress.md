@@ -18,3 +18,5 @@
 - 增强失败状态落库、重试记录和从失败阶段恢复能力；测试由 2 项扩展到 6 项。
 - 新增项目技术说明 `05_Docs/ai_multimodal_agent_project.md`，明确本地实现与 AWS S3/Redis/Celery/WebSocket 生产适配边界。
 - 下一步：如需改成“已接入”表述，必须提供对应服务配置并完成真实服务端到端验证。
+- 验证命令：`python -m unittest discover -s 06_Tests -v`、`python -m compileall -q 02_Source`，以及 `python 02_Source\multimodal_creative_agent\demo.py --workdir 04_Data\local_demo_check_20260827`，均成功。
+- Git：已初始化本地仓库，首个提交为 `53a9b2d`；本次索引和进度同步后继续保留本地提交，不推送远程。
