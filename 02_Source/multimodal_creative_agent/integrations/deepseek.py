@@ -120,13 +120,33 @@ class DeepSeekModel:
         result = self.client.chat_json(prompt, {"stage": stage, "payload": payload})
         if stage == "analyze" and not all(name in result for name in ("intent", "content_type", "constraints")):
             raise RuntimeError("DeepSeek analyze 结果缺少必要字段")
-        if stage == "analyze" and (not isinstance(result["intent"], str) or not isinstance(result["constraints"], list)):
-            raise RuntimeError("DeepSeek analyze 字段类型不正确")
+        if stage == "analyze":
+            if not isinstance(result["intent"], str) or not result["intent"].strip():
+                raise RuntimeError("DeepSeek analyze 的 intent 必须是非空字符串")
+            if not isinstance(result["content_type"], str) or not result["content_type"].strip():
+                raise RuntimeError("DeepSeek analyze 的 content_type 必须是非空字符串")
+            if not isinstance(result["constraints"], list) or not all(isinstance(item, str) for item in result["constraints"]):
+                raise RuntimeError("DeepSeek analyze 的 constraints 必须是字符串数组")
         if stage == "plan" and not all(name in result for name in ("characters", "scenes", "storyboard", "asset_types")):
             raise RuntimeError("DeepSeek plan 结果缺少必要字段")
         if stage == "plan":
             if not all(isinstance(result[name], list) for name in ("characters", "scenes", "storyboard", "asset_types")):
                 raise RuntimeError("DeepSeek plan 字段类型不正确")
-            if not result["characters"] or not result["scenes"] or not result["storyboard"]:
+            if not all(result[name] for name in ("characters", "scenes", "storyboard", "asset_types")):
                 raise RuntimeError("DeepSeek plan 结果不能为空")
+            if not all(isinstance(item, dict) and str(item.get("name", "")).strip() for item in result["characters"]):
+                raise RuntimeError("DeepSeek plan 的角色项必须包含非空 name")
+            if not all(isinstance(item, str) and item.strip() for item in result["scenes"]):
+                raise RuntimeError("DeepSeek plan 的场景必须是非空字符串")
+            if len(result["scenes"]) != len(result["storyboard"]):
+                raise RuntimeError("DeepSeek plan 场景数与分镜数不一致")
+            required_shot_fields = ("scene", "shot", "prompt")
+            for item in result["storyboard"]:
+                if not isinstance(item, dict) or not all(
+                    isinstance(item.get(name), str) and item[name].strip() for name in required_shot_fields
+                ):
+                    raise RuntimeError("DeepSeek plan 分镜项缺少非空字段 scene、shot 或 prompt")
+            supported_asset_types = {"image", "video", "audio"}
+            if not all(isinstance(item, str) and item in supported_asset_types for item in result["asset_types"]):
+                raise RuntimeError("DeepSeek plan 包含不支持的素材类型")
         return result

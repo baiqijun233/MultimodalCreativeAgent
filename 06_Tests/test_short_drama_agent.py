@@ -88,6 +88,14 @@ class FakeArtClawClient:
         return {"job_id": f"job-{self.submit_count}", "status": "pending"}
 
 
+class StaticDeepSeekClient:
+    def __init__(self, result):
+        self.result = result
+
+    def chat_json(self, _prompt, _payload):
+        return self.result
+
+
 class ShortDramaAgentTests(unittest.TestCase):
     def test_state_machine_persists_result(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +224,66 @@ class ShortDramaAgentTests(unittest.TestCase):
                 os.environ.pop("DEEPSEEK_API_KEY", None)
             else:
                 os.environ["DEEPSEEK_API_KEY"] = old_key
+
+    def test_runtime_prefers_deepseek_by_default_when_key_exists(self):
+        import os
+        from runtime import build_runtime_agent
+
+        with tempfile.TemporaryDirectory() as directory:
+            overrides = {
+                "MODEL_PROVIDER": None,
+                "DEEPSEEK_API_KEY": "test-only-key",
+                "TASK_DATABASE_PATH": str(Path(directory) / "tasks.db"),
+                "ASSET_ROOT": str(Path(directory) / "assets"),
+                "REDIS_URL": None,
+            }
+            original = {name: os.environ.get(name) for name in overrides}
+            try:
+                for name, value in overrides.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                agent = build_runtime_agent()
+                self.assertEqual(agent.model_provider, "deepseek")
+                self.assertIsInstance(agent.model, DeepSeekModel)
+                agent.store.close()
+            finally:
+                for name, value in original.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+
+    def test_deepseek_plan_rejects_mismatched_scene_count(self):
+        result = {
+            "characters": [{"name": "主角"}],
+            "scenes": ["开场", "结尾"],
+            "storyboard": [{"scene": "开场", "shot": "全景", "prompt": "主角走入房间"}],
+            "asset_types": ["video"],
+        }
+        with self.assertRaisesRegex(RuntimeError, "场景数与分镜数不一致"):
+            DeepSeekModel(StaticDeepSeekClient(result)).generate("plan", {})
+
+    def test_deepseek_plan_rejects_unsupported_asset_type(self):
+        result = {
+            "characters": [{"name": "主角"}],
+            "scenes": ["开场"],
+            "storyboard": [{"scene": "开场", "shot": "全景", "prompt": "主角走入房间"}],
+            "asset_types": ["video", "subtitle"],
+        }
+        with self.assertRaisesRegex(RuntimeError, "包含不支持的素材类型"):
+            DeepSeekModel(StaticDeepSeekClient(result)).generate("plan", {})
+
+    def test_deepseek_plan_rejects_incomplete_storyboard_item(self):
+        result = {
+            "characters": [{"name": "主角"}],
+            "scenes": ["开场"],
+            "storyboard": [{"scene": "开场", "shot": "全景", "prompt": ""}],
+            "asset_types": ["video"],
+        }
+        with self.assertRaisesRegex(RuntimeError, "分镜项缺少非空字段"):
+            DeepSeekModel(StaticDeepSeekClient(result)).generate("plan", {})
 
     def test_deepseek_timeout_is_wrapped(self):
         import os

@@ -4,7 +4,9 @@ __pycache__/
 .local_demo/
 06_Tests/resume_v8_review/
 04_Data/local_demo_check_*/
+04_Data/runtime/
 04_Data/runtime_import_check*/
 04_Data/openapi_check_*/
+04_Data/redis_backup_*/
 07_Logs/*backup*.md
 07_Logs/*backup*.py
