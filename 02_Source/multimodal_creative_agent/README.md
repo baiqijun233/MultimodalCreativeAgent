@@ -34,6 +34,8 @@ docker compose -f 02_Source\docker-compose.yml up --build
 
 ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）环境变量读取，禁止写入代码、`.env`、日志或 Git。默认采用低成本测试参数：4 秒、480p、9:16、关闭音频；可用 `ARTCLAW_MODEL`、`ARTCLAW_RESOLUTION`、`ARTCLAW_ASPECT_RATIO`、`ARTCLAW_GENERATE_AUDIO` 覆盖。真实提交必须显式传入 `allow_paid=True`。
 
+参考图必须是 ArtClaw 远程服务可以读取的公开 HTTPS 地址，单个分镜最多 9 张。本地文件路径、`localhost`、`.local` 域名和非公网 IP 地址会被拒绝。平台支持为每个分镜单独指定参考图；提交时会按图片顺序自动补充 `@图片1`、`@图片2` 等提示词，并增加角色外观、服装、场景和视觉风格连续性约束。参考图地址不会保存到 SQLite，只保存使用数量和来源类型，避免持久化可能带签名参数的地址。
+
 ## 独立运行与真实规划
 
 DeepSeek 是默认规划模型。平台优先读取用户环境变量 `DEEPSEEK_API_KEY`，将需求解析和分镜规划交给 DeepSeek；未设置时自动使用离线模型，平台仍可启动。若要临时强制离线模式，可设置 `MODEL_PROVIDER=offline`；正常使用不需要设置该变量。
@@ -56,6 +58,7 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 - `POST /tasks/async`：创建短剧规划任务。
 - `GET /tasks/{task_id}`：查看规划状态和分镜结果。
 - `POST /artclaw/videos`：由平台提交单个视频任务。
+- `POST /tasks/{task_id}/artclaw-preview`：不产生费用，预览每个分镜将使用的参考图数量、来源和最终提示词。
 - `POST /tasks/{task_id}/artclaw-submit`：把规划结果中的多个分镜批量提交到 ArtClaw。请求体必须包含 `confirm_paid: true`，已提交分镜会复用任务编号，避免重复扣费。
 - `GET /tasks/{task_id}/artclaw-status`：统一查询该任务下所有分镜的 ArtClaw 状态。
 - `POST /tasks/{task_id}/artclaw-download`：批量下载已完成分镜到本地资产目录，未完成项会返回 `pending`。
@@ -63,3 +66,19 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 - `POST /artclaw/videos/{job_id}/download`：将已完成视频下载到本地资产目录。
 
 `GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name` 和 `artclaw_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。
+
+逐分镜参考图预览示例：
+
+```json
+{
+  "reference_urls": ["https://cdn.example.com/default-room.jpg"],
+  "shot_reference_urls": {
+    "1": ["https://cdn.example.com/hero-front.jpg"],
+    "3": ["https://cdn.example.com/hero-ending.jpg"]
+  },
+  "duration_seconds": 4,
+  "max_new_jobs": 3
+}
+```
+
+`reference_urls` 是未单独配置分镜时的默认参考图；`shot_reference_urls` 使用从 1 开始的分镜编号覆盖默认值。先把请求体发送到预览接口，确认结果后再增加 `"confirm_paid": true`，发送到批量提交接口。

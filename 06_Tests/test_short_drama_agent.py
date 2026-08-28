@@ -82,9 +82,18 @@ class DeepSeekFakeOpener:
 
 class FakeArtClawClient:
     submit_count = 0
+    submissions = []
 
-    def submit_video(self, _prompt, _reference_urls, *, duration_seconds, allow_paid):
+    def submit_video(self, prompt, reference_urls, *, duration_seconds, allow_paid):
         self.__class__.submit_count += 1
+        self.__class__.submissions.append(
+            {
+                "prompt": prompt,
+                "reference_urls": list(reference_urls),
+                "duration_seconds": duration_seconds,
+                "allow_paid": allow_paid,
+            }
+        )
         return {"job_id": f"job-{self.submit_count}", "status": "pending"}
 
 
@@ -187,6 +196,27 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertEqual(config.resolution, "480p")
         self.assertFalse(config.generate_audio)
         self.assertEqual(config.aspect_ratio, "9:16")
+
+    def test_artclaw_client_rejects_local_reference_path(self):
+        import os
+
+        opener = FakeOpener()
+        old = os.environ.get("ARTCLAW_TEST_KEY")
+        os.environ["ARTCLAW_TEST_KEY"] = "test-only-key"
+        try:
+            client = ArtClawClient(ArtClawConfig(api_key_env="ARTCLAW_TEST_KEY"), opener=opener)
+            with self.assertRaisesRegex(ValueError, "远程服务无法读取本地参考图"):
+                client.submit_video(
+                    "生成一个镜头",
+                    [r"E:\Agent\character.png"],
+                    allow_paid=True,
+                )
+            self.assertEqual(opener.calls, [])
+        finally:
+            if old is None:
+                os.environ.pop("ARTCLAW_TEST_KEY", None)
+            else:
+                os.environ["ARTCLAW_TEST_KEY"] = old
 
     def test_deepseek_model_parses_structured_json(self):
         import os
@@ -313,6 +343,7 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertIn("/tasks/{task_id}/events", paths)
         self.assertIn("/ws/tasks/{task_id}", paths)
         self.assertIn("/artclaw/videos", paths)
+        self.assertIn("/tasks/{task_id}/artclaw-preview", paths)
         self.assertIn("/tasks/{task_id}/artclaw-submit", paths)
         self.assertIn("/tasks/{task_id}/artclaw-status", paths)
         self.assertIn("/tasks/{task_id}/artclaw-download", paths)
@@ -333,6 +364,7 @@ class ShortDramaAgentTests(unittest.TestCase):
             task_id = agent.create_task("生成三段短剧分镜").task_id
             agent.run(task_id)
             FakeArtClawClient.submit_count = 0
+            FakeArtClawClient.submissions = []
             with patch("integrations.artclaw.ArtClawClient", FakeArtClawClient):
                 client = TestClient(create_fastapi_app(agent))
                 first = client.post(
@@ -356,6 +388,74 @@ class ShortDramaAgentTests(unittest.TestCase):
                 self.assertEqual(third.status_code, 200)
                 self.assertEqual(third.json()["new_count"], 0)
                 self.assertEqual(FakeArtClawClient.submit_count, 3)
+            store.close()
+
+    def test_artclaw_batch_uses_shot_specific_references(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStore(Path(directory) / "tasks.db")
+            agent = ShortDramaAgent(store=store)
+            task_id = agent.create_task("生成三段角色连续的短剧分镜").task_id
+            agent.run(task_id)
+            FakeArtClawClient.submit_count = 0
+            FakeArtClawClient.submissions = []
+            body = {
+                "reference_urls": ["https://cdn.example.com/default-room.jpg"],
+                "shot_reference_urls": {
+                    "1": ["https://cdn.example.com/hero-front.jpg"],
+                    "3": ["https://cdn.example.com/hero-ending.jpg"],
+                },
+                "max_new_jobs": 3,
+            }
+            with patch("integrations.artclaw.ArtClawClient", FakeArtClawClient):
+                client = TestClient(create_fastapi_app(agent))
+                preview = client.post(f"/tasks/{task_id}/artclaw-preview", json=body)
+                self.assertEqual(preview.status_code, 200)
+                self.assertEqual(FakeArtClawClient.submissions, [])
+                self.assertEqual(
+                    [item["reference_source"] for item in preview.json()["shots"]],
+                    ["shot", "default", "shot"],
+                )
+
+                paid_body = {**body, "confirm_paid": True}
+                submitted = client.post(f"/tasks/{task_id}/artclaw-submit", json=paid_body)
+                self.assertEqual(submitted.status_code, 200)
+                self.assertEqual(
+                    [item["reference_urls"] for item in FakeArtClawClient.submissions],
+                    [
+                        ["https://cdn.example.com/hero-front.jpg"],
+                        ["https://cdn.example.com/default-room.jpg"],
+                        ["https://cdn.example.com/hero-ending.jpg"],
+                    ],
+                )
+                self.assertTrue(all("@图片1" in item["prompt"] for item in FakeArtClawClient.submissions))
+                self.assertEqual([item["reference_count"] for item in submitted.json()["jobs"]], [1, 1, 1])
+                import json
+
+                saved_state = json.dumps(store.get(task_id).state, ensure_ascii=False)
+                self.assertNotIn("cdn.example.com", saved_state)
+            store.close()
+
+    def test_artclaw_preview_rejects_out_of_range_shot_mapping(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStore(Path(directory) / "tasks.db")
+            agent = ShortDramaAgent(store=store)
+            task_id = agent.create_task("生成三段短剧分镜").task_id
+            agent.run(task_id)
+            client = TestClient(create_fastapi_app(agent))
+            response = client.post(
+                f"/tasks/{task_id}/artclaw-preview",
+                json={"shot_reference_urls": {"4": ["https://cdn.example.com/missing-shot.jpg"]}},
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("不存在的分镜编号", response.json()["detail"])
             store.close()
 
     def test_redis_adapter_reports_missing_configuration(self):

@@ -4,12 +4,38 @@ from __future__ import annotations
 
 import json
 import os
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+def normalize_reference_urls(reference_urls: list[str] | None) -> list[str]:
+    """校验并规范化 ArtClaw 能够从公网读取的参考图地址。"""
+    references = [] if reference_urls is None else reference_urls
+    if not isinstance(references, list) or any(not isinstance(url, str) or not url.strip() for url in references):
+        raise ValueError("reference_urls 必须是非空字符串列表")
+    if len(references) > 9:
+        raise ValueError("reference_urls 最多 9 项")
+
+    normalized: list[str] = []
+    for value in references:
+        url = value.strip()
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        is_local_host = hostname in {"localhost", "127.0.0.1", "::1"} or bool(hostname and hostname.endswith(".local"))
+        if hostname and not is_local_host:
+            try:
+                is_local_host = not ip_address(hostname).is_global
+            except ValueError:
+                pass
+        if parsed.scheme != "https" or not parsed.netloc or is_local_host:
+            raise ValueError("远程服务无法读取本地参考图或 localhost 地址；请先提供可公开访问的 HTTPS 地址")
+        normalized.append(url)
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -91,11 +117,7 @@ class ArtClawClient:
             raise ValueError("prompt 必须是非空字符串")
         if not isinstance(duration_seconds, int) or not 4 <= duration_seconds <= 15:
             raise ValueError("duration_seconds 必须是 4 到 15 的整数")
-        references = [] if reference_urls is None else reference_urls
-        if not isinstance(references, list) or any(not isinstance(url, str) or not url.strip() for url in references):
-            raise ValueError("reference_urls 必须是非空字符串列表")
-        if len(references) > 9:
-            raise ValueError("reference_urls 最多 9 项")
+        references = normalize_reference_urls(reference_urls)
         if self.config.aspect_ratio not in {"1:1", "4:3", "3:4", "16:9", "9:16"}:
             raise ValueError("aspect_ratio 必须是支持的标准画幅")
         if self.config.resolution not in {"480p", "720p", "1080p"}:

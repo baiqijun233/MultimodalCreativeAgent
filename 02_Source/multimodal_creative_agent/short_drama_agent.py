@@ -201,7 +201,7 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
         from pydantic import BaseModel, Field
-        from integrations.artclaw import ArtClawClient
+        from integrations.artclaw import ArtClawClient, normalize_reference_urls
     except ImportError as exc:
         raise RuntimeError("安装 fastapi 和 pydantic 后才能启用 HTTP 接口") from exc
 
@@ -212,12 +212,13 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     class ArtClawVideoRequest(BaseModel):
         prompt: str = Field(min_length=1, max_length=5000)
         reference_urls: list[str] = Field(default_factory=list, max_length=9)
-        duration_seconds: int = 4
+        duration_seconds: int = Field(default=4, ge=4, le=15)
         confirm_paid: bool = False
 
     class ArtClawBatchRequest(BaseModel):
         reference_urls: list[str] = Field(default_factory=list, max_length=9)
-        duration_seconds: int = 4
+        shot_reference_urls: dict[int, list[str]] = Field(default_factory=dict, max_length=100)
+        duration_seconds: int = Field(default=4, ge=4, le=15)
         max_new_jobs: int = Field(default=3, ge=1, le=10)
         confirm_paid: bool = False
 
@@ -226,6 +227,53 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
 
     def get_artclaw_client() -> ArtClawClient:
         return ArtClawClient()
+
+    def add_reference_instructions(prompt: str, reference_count: int) -> str:
+        if reference_count <= 0:
+            return prompt
+        reference_tokens = "、".join(f"@图片{index}" for index in range(1, reference_count + 1))
+        return (
+            f"{prompt}\n参考图映射：{reference_tokens}。"
+            "请严格保持参考图中的角色脸型、发型、服装、场景布局和整体视觉风格连续，不要随意替换。"
+        )
+
+    def build_artclaw_reference_preview(task_id: str, body: ArtClawBatchRequest):
+        record = agent.store.get(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        storyboard = record.state.get("stage_results", {}).get("plan", {}).get("storyboard", [])
+        if not isinstance(storyboard, list) or not storyboard:
+            raise HTTPException(status_code=409, detail="任务尚未完成分镜规划")
+
+        default_references = normalize_reference_urls(body.reference_urls)
+        shot_references: dict[int, list[str]] = {}
+        for shot_index, reference_urls in body.shot_reference_urls.items():
+            if shot_index < 1 or shot_index > len(storyboard):
+                raise ValueError(f"参考图映射包含不存在的分镜编号: {shot_index}")
+            shot_references[shot_index] = normalize_reference_urls(reference_urls)
+
+        references_by_index: dict[int, list[str]] = {}
+        preview: list[dict[str, Any]] = []
+        for shot_index, shot in enumerate(storyboard, start=1):
+            if not isinstance(shot, dict):
+                raise ValueError(f"第 {shot_index} 个分镜必须是对象")
+            prompt = str(shot.get("prompt") or shot.get("shot") or "").strip()
+            if not prompt:
+                raise ValueError(f"第 {shot_index} 个分镜缺少可提交的提示词")
+            has_shot_mapping = shot_index in shot_references
+            references = shot_references[shot_index] if has_shot_mapping else default_references
+            references_by_index[shot_index] = references
+            submitted_prompt = add_reference_instructions(prompt, len(references))
+            preview.append(
+                {
+                    "shot_index": shot_index,
+                    "scene": shot.get("scene", ""),
+                    "prompt": submitted_prompt,
+                    "reference_count": len(references),
+                    "reference_source": "shot" if has_shot_mapping else ("default" if references else "none"),
+                }
+            )
+        return record, storyboard, references_by_index, preview
 
     @app.post("/artclaw/videos")
     def submit_artclaw_video(body: ArtClawVideoRequest):
@@ -252,18 +300,42 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    @app.post("/tasks/{task_id}/artclaw-preview")
+    def preview_task_storyboard_for_artclaw(task_id: str, body: ArtClawBatchRequest):
+        """付费提交前检查逐分镜参考图选择，不调用 ArtClaw。"""
+        try:
+            record, _storyboard, _references_by_index, preview = build_artclaw_reference_preview(task_id, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        submitted_by_index = {
+            item.get("shot_index"): item for item in record.state.get("artclaw_jobs", []) if isinstance(item, dict)
+        }
+        shots = []
+        for item in preview:
+            submitted = submitted_by_index.get(item["shot_index"])
+            if submitted is None:
+                shots.append({**item, "already_submitted": False})
+                continue
+            shots.append(
+                {
+                    **item,
+                    "reference_count": submitted.get("reference_count", item["reference_count"]),
+                    "reference_source": submitted.get("reference_source", item["reference_source"]),
+                    "already_submitted": True,
+                }
+            )
+        return {"task_id": task_id, "shot_count": len(shots), "shots": shots}
+
     @app.post("/tasks/{task_id}/artclaw-submit")
     def submit_task_storyboard_to_artclaw(task_id: str, body: ArtClawBatchRequest):
         """把已完成的规划阶段分镜批量提交到 ArtClaw。"""
         if body.confirm_paid is not True:
             raise HTTPException(status_code=400, detail="请将 confirm_paid 设为 true，确认可能产生费用")
         with artclaw_submit_lock:
-            record = agent.store.get(task_id)
-            if record is None:
-                raise HTTPException(status_code=404, detail="任务不存在")
-            storyboard = record.state.get("stage_results", {}).get("plan", {}).get("storyboard", [])
-            if not isinstance(storyboard, list) or not storyboard:
-                raise HTTPException(status_code=409, detail="任务尚未完成分镜规划")
+            try:
+                record, storyboard, references_by_index, reference_preview = build_artclaw_reference_preview(task_id, body)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             existing = record.state.get("artclaw_jobs", [])
             existing_by_index = {item.get("shot_index"): item for item in existing if isinstance(item, dict)}
             client = get_artclaw_client()
@@ -278,14 +350,24 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
                         break
                     if not isinstance(shot, dict):
                         raise ValueError("分镜项必须是对象")
-                    prompt = shot.get("prompt") or shot.get("shot")
+                    prompt = reference_preview[index - 1]["prompt"]
                     result = client.submit_video(
-                        str(prompt or "").strip(),
-                        body.reference_urls,
+                        prompt,
+                        references_by_index[index],
                         duration_seconds=body.duration_seconds,
                         allow_paid=True,
                     )
-                    submitted.append({"shot_index": index, "scene": shot.get("scene", ""), "job_id": result.get("job_id"), "status": result.get("status", "pending")})
+                    preview_item = reference_preview[index - 1]
+                    submitted.append(
+                        {
+                            "shot_index": index,
+                            "scene": shot.get("scene", ""),
+                            "job_id": result.get("job_id"),
+                            "status": result.get("status", "pending"),
+                            "reference_count": preview_item["reference_count"],
+                            "reference_source": preview_item["reference_source"],
+                        }
+                    )
                     new_count += 1
                     state["artclaw_jobs"] = submitted
                     agent._save(record, record.status, state)
