@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 @dataclass(frozen=True)
 class DeepSeekConfig:
     base_url: str = "https://api.deepseek.com"
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"
     api_key_env: str = "DEEPSEEK_API_KEY"
     timeout_seconds: float = 60.0
 

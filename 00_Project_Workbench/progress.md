@@ -68,3 +68,4 @@
 - 新增 `/tasks/{task_id}/artclaw-status` 和 `/tasks/{task_id}/artclaw-download`，完成分镜批量状态查询与批量下载闭环。
 - 12 项自动化测试、Python 编译检查、路由检查、Docker Compose 配置检查和 API/Worker 镜像构建全部通过。
 - 本轮未再次调用真实计费接口；已生成的 ArtClaw 测试视频和任务记录继续保留。
+- DeepSeek `/models` 鉴权检查成功；根据当前账号可用模型列表，将默认模型从 `deepseek-chat` 调整为 `deepseek-v4-flash`，避免独立运行时调用不存在的模型。
