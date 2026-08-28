@@ -200,6 +200,7 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
         from pydantic import BaseModel
+        from integrations.artclaw import ArtClawClient
     except ImportError as exc:
         raise RuntimeError("安装 fastapi 和 pydantic 后才能启用 HTTP 接口") from exc
 
@@ -207,7 +208,140 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         request: str
         constraints: list[str] = []
 
+    class ArtClawVideoRequest(BaseModel):
+        prompt: str
+        reference_urls: list[str] = []
+        duration_seconds: int = 4
+        confirm_paid: bool = False
+
     app = FastAPI(title="Multimodal Agent Demo")
+
+    def get_artclaw_client() -> ArtClawClient:
+        return ArtClawClient()
+
+    @app.post("/artclaw/videos")
+    def submit_artclaw_video(body: ArtClawVideoRequest):
+        """由平台直接提交 ArtClaw 视频任务；生成过程通过任务编号查询。"""
+        if body.confirm_paid is not True:
+            raise HTTPException(status_code=400, detail="请将 confirm_paid 设为 true，确认可能产生费用")
+        try:
+            result = get_artclaw_client().submit_video(
+                body.prompt,
+                body.reference_urls,
+                duration_seconds=body.duration_seconds,
+                allow_paid=True,
+            )
+            return result
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/artclaw/videos/{job_id}")
+    def get_artclaw_video(job_id: str):
+        try:
+            return get_artclaw_client().get_job(job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/tasks/{task_id}/artclaw-submit")
+    def submit_task_storyboard_to_artclaw(task_id: str, body: ArtClawVideoRequest):
+        """把已完成的规划阶段分镜批量提交到 ArtClaw。"""
+        if body.confirm_paid is not True:
+            raise HTTPException(status_code=400, detail="请将 confirm_paid 设为 true，确认可能产生费用")
+        record = agent.store.get(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        storyboard = record.state.get("stage_results", {}).get("plan", {}).get("storyboard", [])
+        if not isinstance(storyboard, list) or not storyboard:
+            raise HTTPException(status_code=409, detail="任务尚未完成分镜规划")
+        existing = record.state.get("artclaw_jobs", [])
+        existing_by_index = {item.get("shot_index"): item for item in existing if isinstance(item, dict)}
+        client = get_artclaw_client()
+        submitted = []
+        try:
+            for index, shot in enumerate(storyboard, start=1):
+                if not isinstance(shot, dict):
+                    raise ValueError("分镜项必须是对象")
+                if index in existing_by_index:
+                    submitted.append(existing_by_index[index])
+                    continue
+                prompt = shot.get("prompt") or shot.get("shot")
+                result = client.submit_video(
+                    str(prompt or "").strip(),
+                    body.reference_urls,
+                    duration_seconds=body.duration_seconds,
+                    allow_paid=True,
+                )
+                submitted.append({"shot_index": index, "scene": shot.get("scene", ""), "job_id": result.get("job_id"), "status": result.get("status", "pending")})
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        state = dict(record.state)
+        state["artclaw_jobs"] = submitted
+        agent._record_event(task_id, state, "artclaw_jobs_submitted", {"count": len(submitted)})
+        saved = agent._save(record, record.status, state)
+        return {"task_id": task_id, "jobs": saved.state["artclaw_jobs"]}
+
+    @app.get("/tasks/{task_id}/artclaw-status")
+    def get_task_artclaw_status(task_id: str):
+        record = agent.store.get(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        jobs = record.state.get("artclaw_jobs", [])
+        if not isinstance(jobs, list) or not jobs:
+            raise HTTPException(status_code=409, detail="任务还没有提交 ArtClaw 分镜")
+        client = get_artclaw_client()
+        statuses = []
+        for item in jobs:
+            if not isinstance(item, dict) or not item.get("job_id"):
+                continue
+            try:
+                remote = client.get_job(str(item["job_id"]))
+                statuses.append({**item, "status": remote.get("status", item.get("status")), "result": remote.get("result")})
+            except RuntimeError as exc:
+                statuses.append({**item, "status": "query_failed", "error": str(exc)})
+        return {"task_id": task_id, "jobs": statuses}
+
+    @app.post("/tasks/{task_id}/artclaw-download")
+    def download_task_artclaw_videos(task_id: str):
+        record = agent.store.get(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        jobs = record.state.get("artclaw_jobs", [])
+        if not isinstance(jobs, list) or not jobs:
+            raise HTTPException(status_code=409, detail="任务还没有提交 ArtClaw 分镜")
+        client = get_artclaw_client()
+        asset_root = agent.asset_store.root if agent.asset_store is not None else ".runtime/assets"
+        downloaded = []
+        pending = []
+        for item in jobs:
+            if not isinstance(item, dict) or not item.get("job_id"):
+                continue
+            try:
+                remote = client.get_job(str(item["job_id"]))
+                if remote.get("status") not in {"success", "succeeded", "completed"}:
+                    pending.append({"shot_index": item.get("shot_index"), "job_id": item.get("job_id"), "status": remote.get("status")})
+                    continue
+                path = client.download_result(remote, asset_root)
+                downloaded.append({"shot_index": item.get("shot_index"), "job_id": item.get("job_id"), "local_file": str(path)})
+            except (ValueError, RuntimeError) as exc:
+                pending.append({"shot_index": item.get("shot_index"), "job_id": item.get("job_id"), "status": "download_failed", "error": str(exc)})
+        return {"task_id": task_id, "downloaded": downloaded, "pending": pending}
+
+    @app.post("/artclaw/videos/{job_id}/download")
+    def download_artclaw_video(job_id: str):
+        try:
+            client = get_artclaw_client()
+            job = client.get_job(job_id)
+            if job.get("status") not in {"success", "succeeded", "completed"}:
+                raise HTTPException(status_code=409, detail="视频尚未生成完成，请稍后重试")
+            asset_root = agent.asset_store.root if agent.asset_store is not None else ".runtime/assets"
+            path = client.download_result(job, asset_root)
+            return {"job_id": job_id, "status": "downloaded", "local_file": str(path)}
+        except HTTPException:
+            raise
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/tasks")
     def create_task(body: CreateRequest):

@@ -18,6 +18,8 @@ services:
       TASK_DATABASE_PATH: /data/tasks.db
       ASSET_ROOT: /data/assets
       ARTCLAW_API_KEY_ACCOUNT_A: ${ARTCLAW_API_KEY_ACCOUNT_A:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
     volumes:
       - creative_data:/data
     ports:
@@ -36,6 +38,8 @@ services:
       TASK_DATABASE_PATH: /data/tasks.db
       ASSET_ROOT: /data/assets
       ARTCLAW_API_KEY_ACCOUNT_A: ${ARTCLAW_API_KEY_ACCOUNT_A:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
     volumes:
       - creative_data:/data
     depends_on:

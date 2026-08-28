@@ -25,4 +25,9 @@ def build_runtime_agent() -> ShortDramaAgent:
         state_cache = RedisStateCache()
     else:
         state_cache = None
-    return ShortDramaAgent(store=store, asset_store=LocalAssetStore(asset_root), event_bus=event_bus, state_cache=state_cache)
+    model = None
+    if os.getenv("DEEPSEEK_API_KEY"):
+        from integrations.deepseek import DeepSeekModel
+
+        model = DeepSeekModel()
+    return ShortDramaAgent(store=store, model=model, asset_store=LocalAssetStore(asset_root), event_bus=event_bus, state_cache=state_cache)

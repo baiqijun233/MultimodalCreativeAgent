@@ -51,3 +51,20 @@
 - 复核 ArtClaw 任务日志、视频文件、媒体探针结果和首帧检查图，均可读取且相互一致。
 - 全文扫描未发现 API 密钥、密钥赋值或请求头中的敏感值残留；密钥文件仍在项目外，仅作为本机运行输入。
 - 当前项目可对外说明为：已完成 ArtClaw 测试账号的一次真实低成本生成验收；AWS S3 仍跳过，资产本地保存。
+
+## 2026-08-28 - 平台独立运行与闭环接入
+
+- DeepSeek 可选适配已加入运行时：配置 `DEEPSEEK_API_KEY` 后自动用于需求解析和分镜规划；缺少密钥时自动回退离线模型，平台仍可启动。
+- ArtClaw 已接入平台 API：单镜头提交、任务查询、单镜头下载，以及按规划分镜批量提交、统一状态查询和批量下载。
+- 分镜任务编号持久化到 SQLite，重复批量提交会复用已有任务，避免重复计费。
+- DeepSeek 和 ArtClaw 密钥已写入当前用户环境变量，均未写入项目、日志或 Git；Docker Compose 已转发对应环境变量。
+- 新增独立启动脚本 `02_Source/run_platform.ps1`，重启后可自行启动平台，不依赖当前对话。
+- 自动化测试 12 项通过，Docker Compose 配置检查和 API 镜像构建通过。
+
+## 2026-08-28 - 独立运行复核
+
+- DeepSeek 和 ArtClaw 密钥均已写入当前用户环境变量，项目代码不保存密钥。
+- 有 `DEEPSEEK_API_KEY` 时运行时选择 `DeepSeekModel`；无该变量时选择 `DeterministicModel`，两种模式均可启动。
+- 新增 `/tasks/{task_id}/artclaw-status` 和 `/tasks/{task_id}/artclaw-download`，完成分镜批量状态查询与批量下载闭环。
+- 12 项自动化测试、Python 编译检查、路由检查、Docker Compose 配置检查和 API/Worker 镜像构建全部通过。
+- 本轮未再次调用真实计费接口；已生成的 ArtClaw 测试视频和任务记录继续保留。

@@ -33,3 +33,23 @@ docker compose -f 02_Source\docker-compose.yml up --build
 启动后默认可访问 `http://localhost:8001/health`，WebSocket 地址为 `ws://localhost:8001/ws/tasks/{task_id}`；如需其他端口可设置 `API_PORT`。不需要 Redis 时，直接运行 `demo.py` 仍使用 SQLite、线程池和本地资产目录。
 
 ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）环境变量读取，禁止写入代码、`.env`、日志或 Git。默认采用低成本测试参数：4 秒、480p、9:16、关闭音频；可用 `ARTCLAW_MODEL`、`ARTCLAW_RESOLUTION`、`ARTCLAW_ASPECT_RATIO`、`ARTCLAW_GENERATE_AUDIO` 覆盖。真实提交必须显式传入 `allow_paid=True`。
+
+## 独立运行与真实规划
+
+DeepSeek 为可选规划模型。设置用户环境变量 `DEEPSEEK_API_KEY` 后，平台自动将需求解析和分镜规划交给 DeepSeek；未设置时自动使用离线模型，平台仍可启动。
+
+```powershell
+Set-Location E:\Agent\AIProjects\Project025_MultimodalCreativeAgent\02_Source
+.\run_platform.ps1
+```
+
+常用接口：
+
+- `POST /tasks/async`：创建短剧规划任务。
+- `GET /tasks/{task_id}`：查看规划状态和分镜结果。
+- `POST /artclaw/videos`：由平台提交单个视频任务。
+- `POST /tasks/{task_id}/artclaw-submit`：把规划结果中的多个分镜批量提交到 ArtClaw。请求体必须包含 `confirm_paid: true`，已提交分镜会复用任务编号，避免重复扣费。
+- `GET /tasks/{task_id}/artclaw-status`：统一查询该任务下所有分镜的 ArtClaw 状态。
+- `POST /tasks/{task_id}/artclaw-download`：批量下载已完成分镜到本地资产目录，未完成项会返回 `pending`。
+- `GET /artclaw/videos/{job_id}`：查询 ArtClaw 任务。
+- `POST /artclaw/videos/{job_id}/download`：将已完成视频下载到本地资产目录。

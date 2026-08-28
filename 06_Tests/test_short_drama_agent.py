@@ -11,6 +11,7 @@ from common.assets import LocalAssetStore
 from common.events import InMemoryEventBus
 from async_runner import AsyncTaskRunner
 from integrations.artclaw import ArtClawClient, ArtClawConfig
+from integrations.deepseek import DeepSeekClient, DeepSeekConfig, DeepSeekModel
 from integrations.redis_backend import _redis_client
 from short_drama_agent import create_fastapi_app
 from short_drama_agent import ShortDramaAgent
@@ -67,6 +68,15 @@ class FakeOpener:
     def __call__(self, request, timeout):
         self.calls.append((request, timeout))
         return FakeResponse({"job_id": "job-demo"})
+
+
+class DeepSeekFakeOpener:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, request, timeout):
+        self.calls.append((request, timeout))
+        return FakeResponse({"choices": [{"message": {"content": '{"intent":"测试需求","content_type":"short_drama","constraints":[]}'}}]})
 
 
 class ShortDramaAgentTests(unittest.TestCase):
@@ -161,6 +171,21 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertFalse(config.generate_audio)
         self.assertEqual(config.aspect_ratio, "9:16")
 
+    def test_deepseek_model_parses_structured_json(self):
+        import os
+
+        old = os.environ.get("DEEPSEEK_TEST_KEY")
+        os.environ["DEEPSEEK_TEST_KEY"] = "test-only-key"
+        try:
+            client = DeepSeekClient(DeepSeekConfig(api_key_env="DEEPSEEK_TEST_KEY"), opener=DeepSeekFakeOpener())
+            result = DeepSeekModel(client).generate("analyze", {"request": "测试需求", "constraints": []})
+            self.assertEqual(result["intent"], "测试需求")
+        finally:
+            if old is None:
+                os.environ.pop("DEEPSEEK_TEST_KEY", None)
+            else:
+                os.environ["DEEPSEEK_TEST_KEY"] = old
+
     def test_fastapi_routes_are_registered_without_external_services(self):
         agent = ShortDramaAgent(store=TaskStore())
         app = create_fastapi_app(agent)
@@ -168,6 +193,10 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertIn("/health", paths)
         self.assertIn("/tasks/{task_id}/events", paths)
         self.assertIn("/ws/tasks/{task_id}", paths)
+        self.assertIn("/artclaw/videos", paths)
+        self.assertIn("/tasks/{task_id}/artclaw-submit", paths)
+        self.assertIn("/tasks/{task_id}/artclaw-status", paths)
+        self.assertIn("/tasks/{task_id}/artclaw-download", paths)
         health = next(route for route in app.routes if route.path == "/health")
         self.assertEqual(health.endpoint()["status"], "ok")
 

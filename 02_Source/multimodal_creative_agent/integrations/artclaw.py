@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -118,3 +120,30 @@ class ArtClawClient:
         if not isinstance(job_id, str) or not job_id.strip():
             raise ValueError("job_id 必须是非空字符串")
         return self._request("GET", f"/jobs/{job_id.strip()}")
+
+    def download_result(self, job: dict[str, Any], output_dir: str | Path) -> Path:
+        """下载成功任务的视频到本地资产目录，并返回文件路径。"""
+        if not isinstance(job, dict):
+            raise TypeError("job 必须是对象")
+        result = job.get("result")
+        url = result.get("url") if isinstance(result, dict) else None
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("任务结果中没有可下载的视频地址")
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.netloc not in {"assets.vicoo.ai", "artclaw.com"}:
+            raise ValueError("视频地址不是允许的 ArtClaw 资源地址")
+        job_id = str(job.get("job_id", "")).strip()
+        if not job_id:
+            raise ValueError("任务结果缺少 job_id")
+        target_dir = Path(output_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"artclaw_{job_id}.mp4"
+        try:
+            with self._opener(url, timeout=self.config.timeout_seconds) as response:
+                data = response.read()
+        except (HTTPError, URLError, OSError) as exc:
+            raise RuntimeError(f"ArtClaw 视频下载失败: {exc}") from exc
+        if not data:
+            raise RuntimeError("ArtClaw 视频下载结果为空")
+        target.write_bytes(data)
+        return target
