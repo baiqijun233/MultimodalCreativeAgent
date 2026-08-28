@@ -72,8 +72,9 @@ class ArtClawClient:
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"ArtClaw 请求失败（HTTP {exc.code}）: {detail}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"ArtClaw 网络连接失败: {exc.reason}") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            reason = getattr(exc, "reason", str(exc))
+            raise RuntimeError(f"ArtClaw 网络连接失败: {reason}") from exc
         try:
             result = json.loads(raw) if raw else {}
         except json.JSONDecodeError as exc:

@@ -6,6 +6,7 @@ with a VLM/LLM client without changing orchestration or persistence logic.
 
 import asyncio
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -199,22 +200,29 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     """Optional FastAPI adapter; imported only when the dependency is present."""
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-        from pydantic import BaseModel
+        from pydantic import BaseModel, Field
         from integrations.artclaw import ArtClawClient
     except ImportError as exc:
         raise RuntimeError("安装 fastapi 和 pydantic 后才能启用 HTTP 接口") from exc
 
     class CreateRequest(BaseModel):
-        request: str
-        constraints: list[str] = []
+        request: str = Field(min_length=1, max_length=10000)
+        constraints: list[str] = Field(default_factory=list, max_length=50)
 
     class ArtClawVideoRequest(BaseModel):
-        prompt: str
-        reference_urls: list[str] = []
+        prompt: str = Field(min_length=1, max_length=5000)
+        reference_urls: list[str] = Field(default_factory=list, max_length=9)
         duration_seconds: int = 4
         confirm_paid: bool = False
 
+    class ArtClawBatchRequest(BaseModel):
+        reference_urls: list[str] = Field(default_factory=list, max_length=9)
+        duration_seconds: int = 4
+        max_new_jobs: int = Field(default=3, ge=1, le=10)
+        confirm_paid: bool = False
+
     app = FastAPI(title="Multimodal Agent Demo")
+    artclaw_submit_lock = threading.Lock()
 
     def get_artclaw_client() -> ArtClawClient:
         return ArtClawClient()
@@ -245,42 +253,54 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/tasks/{task_id}/artclaw-submit")
-    def submit_task_storyboard_to_artclaw(task_id: str, body: ArtClawVideoRequest):
+    def submit_task_storyboard_to_artclaw(task_id: str, body: ArtClawBatchRequest):
         """把已完成的规划阶段分镜批量提交到 ArtClaw。"""
         if body.confirm_paid is not True:
             raise HTTPException(status_code=400, detail="请将 confirm_paid 设为 true，确认可能产生费用")
-        record = agent.store.get(task_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        storyboard = record.state.get("stage_results", {}).get("plan", {}).get("storyboard", [])
-        if not isinstance(storyboard, list) or not storyboard:
-            raise HTTPException(status_code=409, detail="任务尚未完成分镜规划")
-        existing = record.state.get("artclaw_jobs", [])
-        existing_by_index = {item.get("shot_index"): item for item in existing if isinstance(item, dict)}
-        client = get_artclaw_client()
-        submitted = []
-        try:
-            for index, shot in enumerate(storyboard, start=1):
-                if not isinstance(shot, dict):
-                    raise ValueError("分镜项必须是对象")
-                if index in existing_by_index:
-                    submitted.append(existing_by_index[index])
-                    continue
-                prompt = shot.get("prompt") or shot.get("shot")
-                result = client.submit_video(
-                    str(prompt or "").strip(),
-                    body.reference_urls,
-                    duration_seconds=body.duration_seconds,
-                    allow_paid=True,
-                )
-                submitted.append({"shot_index": index, "scene": shot.get("scene", ""), "job_id": result.get("job_id"), "status": result.get("status", "pending")})
-        except (ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        state = dict(record.state)
-        state["artclaw_jobs"] = submitted
-        agent._record_event(task_id, state, "artclaw_jobs_submitted", {"count": len(submitted)})
-        saved = agent._save(record, record.status, state)
-        return {"task_id": task_id, "jobs": saved.state["artclaw_jobs"]}
+        with artclaw_submit_lock:
+            record = agent.store.get(task_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="任务不存在")
+            storyboard = record.state.get("stage_results", {}).get("plan", {}).get("storyboard", [])
+            if not isinstance(storyboard, list) or not storyboard:
+                raise HTTPException(status_code=409, detail="任务尚未完成分镜规划")
+            existing = record.state.get("artclaw_jobs", [])
+            existing_by_index = {item.get("shot_index"): item for item in existing if isinstance(item, dict)}
+            client = get_artclaw_client()
+            submitted = list(existing_by_index.values())
+            new_count = 0
+            state = dict(record.state)
+            try:
+                for index, shot in enumerate(storyboard, start=1):
+                    if index in existing_by_index:
+                        continue
+                    if new_count >= body.max_new_jobs:
+                        break
+                    if not isinstance(shot, dict):
+                        raise ValueError("分镜项必须是对象")
+                    prompt = shot.get("prompt") or shot.get("shot")
+                    result = client.submit_video(
+                        str(prompt or "").strip(),
+                        body.reference_urls,
+                        duration_seconds=body.duration_seconds,
+                        allow_paid=True,
+                    )
+                    submitted.append({"shot_index": index, "scene": shot.get("scene", ""), "job_id": result.get("job_id"), "status": result.get("status", "pending")})
+                    new_count += 1
+                    state["artclaw_jobs"] = submitted
+                    agent._save(record, record.status, state)
+            except (ValueError, RuntimeError) as exc:
+                # 先落库已成功提交的分镜，重试时可复用任务编号，避免重复计费。
+                state["artclaw_jobs"] = submitted
+                if submitted:
+                    agent._record_event(task_id, state, "artclaw_jobs_partial", {"count": len(submitted), "error": str(exc)})
+                    agent._save(record, record.status, state)
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            state["artclaw_jobs"] = submitted
+            remaining = max(0, len(storyboard) - len(submitted))
+            agent._record_event(task_id, state, "artclaw_jobs_submitted", {"new_count": new_count, "remaining": remaining})
+            saved = agent._save(record, record.status, state)
+            return {"task_id": task_id, "new_count": new_count, "remaining": remaining, "jobs": saved.state["artclaw_jobs"]}
 
     @app.get("/tasks/{task_id}/artclaw-status")
     def get_task_artclaw_status(task_id: str):
@@ -311,7 +331,7 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         if not isinstance(jobs, list) or not jobs:
             raise HTTPException(status_code=409, detail="任务还没有提交 ArtClaw 分镜")
         client = get_artclaw_client()
-        asset_root = agent.asset_store.root if agent.asset_store is not None else ".runtime/assets"
+        asset_root = agent.asset_store.root if agent.asset_store is not None else Path(__file__).resolve().parents[2] / "04_Data" / "runtime" / "assets"
         downloaded = []
         pending = []
         for item in jobs:
@@ -335,7 +355,7 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
             job = client.get_job(job_id)
             if job.get("status") not in {"success", "succeeded", "completed"}:
                 raise HTTPException(status_code=409, detail="视频尚未生成完成，请稍后重试")
-            asset_root = agent.asset_store.root if agent.asset_store is not None else ".runtime/assets"
+            asset_root = agent.asset_store.root if agent.asset_store is not None else Path(__file__).resolve().parents[2] / "04_Data" / "runtime" / "assets"
             path = client.download_result(job, asset_root)
             return {"job_id": job_id, "status": "downloaded", "local_file": str(path)}
         except HTTPException:
@@ -383,7 +403,15 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "service": "multimodal-creative-agent"}
+        model_config = getattr(getattr(agent, "model", None), "client", None)
+        model_config = getattr(model_config, "config", None)
+        return {
+            "status": "ok",
+            "service": "multimodal-creative-agent",
+            "model_provider": getattr(agent, "model_provider", "offline"),
+            "model_name": getattr(model_config, "model", "deterministic-offline"),
+            "artclaw_configured": bool(os.getenv("ARTCLAW_API_KEY_ACCOUNT_A") or os.getenv("ARTCLAW_API_KEY")),
+        }
 
     @app.websocket("/ws/tasks/{task_id}")
     async def task_websocket(websocket: WebSocket, task_id: str):

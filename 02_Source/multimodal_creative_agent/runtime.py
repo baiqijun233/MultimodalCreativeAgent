@@ -12,8 +12,10 @@ from short_drama_agent import ShortDramaAgent
 
 
 def build_runtime_agent() -> ShortDramaAgent:
-    database_path = Path(os.getenv("TASK_DATABASE_PATH", ".runtime/tasks.db")).expanduser()
-    asset_root = Path(os.getenv("ASSET_ROOT", ".runtime/assets")).expanduser()
+    project_root = Path(__file__).resolve().parents[2]
+    default_runtime_root = project_root / "04_Data" / "runtime"
+    database_path = Path(os.getenv("TASK_DATABASE_PATH", str(default_runtime_root / "tasks.db"))).expanduser()
+    asset_root = Path(os.getenv("ASSET_ROOT", str(default_runtime_root / "assets"))).expanduser()
     database_path.parent.mkdir(parents=True, exist_ok=True)
     asset_root.mkdir(parents=True, exist_ok=True)
     store = TaskStore(database_path)
@@ -26,8 +28,14 @@ def build_runtime_agent() -> ShortDramaAgent:
     else:
         state_cache = None
     model = None
-    if os.getenv("DEEPSEEK_API_KEY"):
+    model_provider = os.getenv("MODEL_PROVIDER", "deepseek").strip().lower()
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    if model_provider not in {"deepseek", "offline"}:
+        raise ValueError("MODEL_PROVIDER 必须是 deepseek 或 offline")
+    if model_provider == "deepseek" and deepseek_key:
         from integrations.deepseek import DeepSeekModel
 
         model = DeepSeekModel()
-    return ShortDramaAgent(store=store, model=model, asset_store=LocalAssetStore(asset_root), event_bus=event_bus, state_cache=state_cache)
+    agent = ShortDramaAgent(store=store, model=model, asset_store=LocalAssetStore(asset_root), event_bus=event_bus, state_cache=state_cache)
+    agent.model_provider = "deepseek" if model is not None else "offline"
+    return agent

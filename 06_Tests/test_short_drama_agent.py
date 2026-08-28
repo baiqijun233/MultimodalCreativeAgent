@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[1] / "02_Source" / "multimodal_creative_agent"
 sys.path.insert(0, str(SOURCE))
@@ -77,6 +78,14 @@ class DeepSeekFakeOpener:
     def __call__(self, request, timeout):
         self.calls.append((request, timeout))
         return FakeResponse({"choices": [{"message": {"content": '{"intent":"测试需求","content_type":"short_drama","constraints":[]}'}}]})
+
+
+class FakeArtClawClient:
+    submit_count = 0
+
+    def submit_video(self, _prompt, _reference_urls, *, duration_seconds, allow_paid):
+        self.__class__.submit_count += 1
+        return {"job_id": f"job-{self.submit_count}", "status": "pending"}
 
 
 class ShortDramaAgentTests(unittest.TestCase):
@@ -186,6 +195,48 @@ class ShortDramaAgentTests(unittest.TestCase):
             else:
                 os.environ["DEEPSEEK_TEST_KEY"] = old
 
+    def test_runtime_can_explicitly_force_offline_model(self):
+        import os
+        from runtime import build_runtime_agent
+
+        old_provider = os.environ.get("MODEL_PROVIDER")
+        old_key = os.environ.get("DEEPSEEK_API_KEY")
+        os.environ["MODEL_PROVIDER"] = "offline"
+        os.environ["DEEPSEEK_API_KEY"] = "test-only-key"
+        try:
+            agent = build_runtime_agent()
+            self.assertEqual(agent.model_provider, "offline")
+            agent.store.close()
+        finally:
+            if old_provider is None:
+                os.environ.pop("MODEL_PROVIDER", None)
+            else:
+                os.environ["MODEL_PROVIDER"] = old_provider
+            if old_key is None:
+                os.environ.pop("DEEPSEEK_API_KEY", None)
+            else:
+                os.environ["DEEPSEEK_API_KEY"] = old_key
+
+    def test_deepseek_timeout_is_wrapped(self):
+        import os
+        from urllib.error import URLError
+
+        class TimeoutOpener:
+            def __call__(self, _request, timeout):
+                raise URLError("timed out")
+
+        old = os.environ.get("DEEPSEEK_TEST_KEY")
+        os.environ["DEEPSEEK_TEST_KEY"] = "test-only-key"
+        try:
+            client = DeepSeekClient(DeepSeekConfig(api_key_env="DEEPSEEK_TEST_KEY"), opener=TimeoutOpener())
+            with self.assertRaisesRegex(RuntimeError, "DeepSeek 网络连接失败"):
+                client.chat_json("返回 JSON", {"stage": "analyze"})
+        finally:
+            if old is None:
+                os.environ.pop("DEEPSEEK_TEST_KEY", None)
+            else:
+                os.environ["DEEPSEEK_TEST_KEY"] = old
+
     def test_fastapi_routes_are_registered_without_external_services(self):
         agent = ShortDramaAgent(store=TaskStore())
         app = create_fastapi_app(agent)
@@ -199,6 +250,45 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertIn("/tasks/{task_id}/artclaw-download", paths)
         health = next(route for route in app.routes if route.path == "/health")
         self.assertEqual(health.endpoint()["status"], "ok")
+        self.assertIn(health.endpoint()["model_provider"], {"deepseek", "offline"})
+        self.assertIn("model_name", health.endpoint())
+        self.assertIn("artclaw_configured", health.endpoint())
+
+    def test_artclaw_batch_submit_limits_and_reuses_jobs(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStore(Path(directory) / "tasks.db")
+            agent = ShortDramaAgent(store=store)
+            task_id = agent.create_task("生成三段短剧分镜").task_id
+            agent.run(task_id)
+            FakeArtClawClient.submit_count = 0
+            with patch("integrations.artclaw.ArtClawClient", FakeArtClawClient):
+                client = TestClient(create_fastapi_app(agent))
+                first = client.post(
+                    f"/tasks/{task_id}/artclaw-submit",
+                    json={"confirm_paid": True, "max_new_jobs": 2},
+                )
+                self.assertEqual(first.status_code, 200)
+                self.assertEqual(first.json()["new_count"], 2)
+                self.assertEqual(first.json()["remaining"], 1)
+                second = client.post(
+                    f"/tasks/{task_id}/artclaw-submit",
+                    json={"confirm_paid": True, "max_new_jobs": 2},
+                )
+                self.assertEqual(second.status_code, 200)
+                self.assertEqual(second.json()["new_count"], 1)
+                self.assertEqual(second.json()["remaining"], 0)
+                third = client.post(
+                    f"/tasks/{task_id}/artclaw-submit",
+                    json={"confirm_paid": True, "max_new_jobs": 2},
+                )
+                self.assertEqual(third.status_code, 200)
+                self.assertEqual(third.json()["new_count"], 0)
+                self.assertEqual(FakeArtClawClient.submit_count, 3)
+            store.close()
 
     def test_redis_adapter_reports_missing_configuration(self):
         import os

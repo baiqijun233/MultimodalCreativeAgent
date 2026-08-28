@@ -36,11 +36,19 @@ ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）�
 
 ## 独立运行与真实规划
 
-DeepSeek 为可选规划模型。设置用户环境变量 `DEEPSEEK_API_KEY` 后，平台自动将需求解析和分镜规划交给 DeepSeek；未设置时自动使用离线模型，平台仍可启动。
+DeepSeek 是默认规划模型。平台优先读取用户环境变量 `DEEPSEEK_API_KEY`，将需求解析和分镜规划交给 DeepSeek；未设置时自动使用离线模型，平台仍可启动。若要临时强制离线模式，可设置 `MODEL_PROVIDER=offline`；正常使用不需要设置该变量。
 
 ```powershell
 Set-Location E:\Agent\AIProjects\Project025_MultimodalCreativeAgent\02_Source
 .\run_platform.ps1
+```
+
+脚本默认只监听本机 `127.0.0.1`，避免局域网其他设备调用付费接口。确实需要局域网访问时，才显式传入 `-HostAddress 0.0.0.0`，并自行增加认证和防火墙规则。
+
+Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerShell 会话漏传密钥）：
+
+```powershell
+.\run_docker.ps1 -Build
 ```
 
 常用接口：
@@ -53,3 +61,5 @@ Set-Location E:\Agent\AIProjects\Project025_MultimodalCreativeAgent\02_Source
 - `POST /tasks/{task_id}/artclaw-download`：批量下载已完成分镜到本地资产目录，未完成项会返回 `pending`。
 - `GET /artclaw/videos/{job_id}`：查询 ArtClaw 任务。
 - `POST /artclaw/videos/{job_id}/download`：将已完成视频下载到本地资产目录。
+
+`GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name` 和 `artclaw_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。

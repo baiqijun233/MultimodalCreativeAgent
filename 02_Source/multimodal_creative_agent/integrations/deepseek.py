@@ -76,8 +76,9 @@ class DeepSeekClient:
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"DeepSeek 请求失败（HTTP {exc.code}）: {detail}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"DeepSeek 网络连接失败: {exc.reason}") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            reason = getattr(exc, "reason", str(exc))
+            raise RuntimeError(f"DeepSeek 网络连接失败: {reason}") from exc
         try:
             response_data = json.loads(raw) if raw else {}
             content = response_data["choices"][0]["message"]["content"]
@@ -112,11 +113,20 @@ class DeepSeekModel:
             "你是短剧多模态创作规划器。只返回 JSON 对象，不要 Markdown。"
             "analyze 阶段返回 intent、content_type、constraints；"
             "plan 阶段返回 characters、scenes、storyboard、asset_types。"
-            "storyboard 必须是数组，每项包含 scene、shot、prompt，prompt 要能独立用于视频生成。"
+            "plan 阶段 scenes 和 storyboard 数量必须完全相等，asset_types 只能从 image、video、audio 中选择。"
+            "storyboard 必须是数组，每项包含 scene、shot、prompt，prompt 要能独立用于视频生成，"
+            "并写清角色外观、服装、场景、动作、镜头、光线、画幅和连续性约束。"
         )
         result = self.client.chat_json(prompt, {"stage": stage, "payload": payload})
         if stage == "analyze" and not all(name in result for name in ("intent", "content_type", "constraints")):
             raise RuntimeError("DeepSeek analyze 结果缺少必要字段")
+        if stage == "analyze" and (not isinstance(result["intent"], str) or not isinstance(result["constraints"], list)):
+            raise RuntimeError("DeepSeek analyze 字段类型不正确")
         if stage == "plan" and not all(name in result for name in ("characters", "scenes", "storyboard", "asset_types")):
             raise RuntimeError("DeepSeek plan 结果缺少必要字段")
+        if stage == "plan":
+            if not all(isinstance(result[name], list) for name in ("characters", "scenes", "storyboard", "asset_types")):
+                raise RuntimeError("DeepSeek plan 字段类型不正确")
+            if not result["characters"] or not result["scenes"] or not result["storyboard"]:
+                raise RuntimeError("DeepSeek plan 结果不能为空")
         return result
