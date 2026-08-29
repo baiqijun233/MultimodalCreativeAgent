@@ -1,4 +1,4 @@
-# AI 多模态创作与短剧生成 Agent 平台
+# MultimodalCreativeAgent（AI 多模态创作与短剧生成 Agent 平台）
 
 本项目展示多模态创作任务的状态机编排、结构化输出、异步任务边界、失败重试和 SQLite 状态持久化。核心逻辑默认只依赖 Python 标准库，可替换接入 VLM/LLM、对象存储和消息队列。
 
