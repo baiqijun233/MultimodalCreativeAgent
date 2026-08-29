@@ -178,3 +178,12 @@
 - 自动化验证：35 项 unittest 全部通过，Python 编译检查、Compose 配置检查和差异检查通过。
 - 本轮未调用 DeepSeek、ArtClaw 或图片生成，不产生外部额度消耗。
 - PowerShell 复核中曾误用保留变量 `$HOME`，已改用 `$dashboardStatus` 重新执行，项目代码无影响。
+
+## 2026-08-29 - 真实密钥正式生产验收
+
+- 读取当前用户级 `DEEPSEEK_API_KEY` 和 `ARTCLAW_API_KEY_ACCOUNT_A`，未输出或写入密钥内容。
+- 使用 DeepSeek `deepseek-v4-flash` 完成真实需求分析和分镜规划；首轮部分结构化结果未通过严格校验，Celery 自动重试后任务 `dae44f242c8548bab8f48e7a1a47e95c` 成功，五阶段全部完成。
+- 复用该任务的成功规划，仅提交 1 个最低成本 ArtClaw 分镜：4 秒、480p、9:16、关闭音频；任务 `5245e956-5152-4a48-b424-8b5e1715060a` 最终 `success` 并下载成功。
+- 视频保存为 `08_Deliverables/formal_production_artclaw_5245e956.mp4`，媒体探针确认 H.264、496x864、24fps、4.041667 秒、无音频，首帧视觉检查通过。
+- ArtClaw 可用额度从 68 降至 44，消耗 24 点；SQLite `usage_audit` 已记录本次成功提交。
+- 本轮未调用图片生成，未提交其他分镜；完整证据见 `07_Logs/formal_production_acceptance_20260829.json`。
