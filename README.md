@@ -106,6 +106,15 @@ Set-Location 02_Source
 
 需要 Python 3.11+、FastAPI、Uvicorn、Redis 客户端、Celery 和 HTTPX 测试客户端。依赖版本已固定在已验证的兼容范围，完整清单见 [requirements-optional.txt](02_Source/requirements-optional.txt)。
 
+## 容器镜像
+
+GHCR 镜像已通过 `v0.1.0` 工作流真实发布：
+
+```powershell
+docker pull ghcr.io/baiqijun233/multimodalcreativeagent:0.1.0
+docker pull ghcr.io/baiqijun233/multimodalcreativeagent:latest
+```
+
 ## 🔐 配置
 
 密钥只通过环境变量注入，不写入代码、日志或 Git：
