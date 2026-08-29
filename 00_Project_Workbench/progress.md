@@ -1,5 +1,12 @@
 # 项目进度
 
+## 2026-08-29 GitHub 统一发布准备
+
+- 完成公开仓库审计，新增 GHCR 发布工作流并核对真实控制台与验收截图路径。
+- 35 项自动化测试、Python 编译检查和 Compose 配置校验通过。
+- 本机 Docker Desktop 当前未启动，镜像构建待 GitHub Actions 真实执行后确认。
+- 已推送 `v0.1.0`，GitHub Actions 构建并发布 `ghcr.io/baiqijun233/multimodalcreativeagent:0.1.0` 与 `latest` 成功；Release 已创建。
+
 ## 2026-08-26
 
 - 从组合工程拆出独立项目目录。
