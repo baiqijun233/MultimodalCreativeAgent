@@ -83,10 +83,13 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 - `GET /`：打开本地创作工作台，可创建任务、查看状态、查看图片和预览清理结果。
 - `GET /tasks`：按更新时间查看任务列表。
 - `POST /maintenance/cleanup`：预览或确认清理过期任务及其资产目录。
+- `GET /usage-audit`：查看外部付费调用的最小审计记录（不含密钥和完整提示词）。
+- `GET /metrics`：输出基础 Prometheus 指标，供服务器监控采集。
 
 `GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name`、`artclaw_configured` 和 `image_provider_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。`GET /ready` 会检查 SQLite 和已配置的 Redis 是否可用，适合 Docker、反向代理或云平台健康探测；它不会主动调用 DeepSeek、ArtClaw 或图片生成服务。
 
 当前代码已达到上线候选状态；正式上线只差目标服务器、持久化磁盘、Redis、HTTPS/域名和密钥管理的环境适配。具体步骤见 `05_Docs/上线适配清单.md`。
+配置 Redis 后，ArtClaw 和图片生成的付费提交使用跨进程锁；无 Redis 时回退单进程线程锁。对象存储暂缓，资产默认保存到 `/data`。
 
 逐分镜参考图预览示例：
 

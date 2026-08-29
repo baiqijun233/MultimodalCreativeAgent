@@ -17,6 +17,8 @@ from typing import Any, Protocol
 from common.storage import TaskRecord, TaskStore, utc_now
 from common.assets import LocalAssetStore
 from common.events import InMemoryEventBus
+from common.metrics import MetricsRegistry
+from integrations.redis_lock import RedisDistributedLock
 
 
 class ModelAdapter(Protocol):
@@ -240,6 +242,41 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     app = FastAPI(title="Multimodal Agent Demo")
     artclaw_submit_lock = threading.Lock()
     image_generate_lock = threading.Lock()
+    metrics = MetricsRegistry()
+
+    @app.middleware("http")
+    async def collect_request_metrics(request, call_next):
+        started = time.monotonic()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            metrics.increment("agent_requests_total", method=request.method, path=request.url.path, status=str(status_code))
+            metrics.observe("agent_request_duration", time.monotonic() - started)
+
+    def paid_lock(name: str, fallback_lock: threading.Lock):
+        state_cache = getattr(agent, "state_cache", None)
+        redis_client = getattr(state_cache, "client", None)
+        if redis_client is None:
+            return fallback_lock
+        return RedisDistributedLock(redis_client, name, ttl_seconds=180)
+
+    def audit_usage(*, task_id: str | None, provider: str, operation: str, status: str, estimated_cost: float | None = None, actual_cost: float | None = None, error_message: str | None = None) -> None:
+        try:
+            agent.store.record_usage_audit(
+                task_id=task_id,
+                provider=provider,
+                operation=operation,
+                status=status,
+                estimated_cost=estimated_cost,
+                actual_cost=actual_cost,
+                error_message=error_message,
+            )
+        except Exception:
+            # 审计不能阻断主业务，但指标仍保留调用次数。
+            metrics.increment("agent_audit_errors_total")
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard():
@@ -340,7 +377,18 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         """分批生成角色和场景参考图，成功一张就立即保存并落库。"""
         if body.confirm_paid is not True:
             raise HTTPException(status_code=400, detail="请将 confirm_paid 设为 true，确认图片生成可能产生费用")
-        with image_generate_lock:
+        try:
+            lock_context = paid_lock(f"agent:paid:image:{task_id}", image_generate_lock)
+            acquired_context = lock_context
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=503, detail=f"付费任务锁配置异常: {exc}") from exc
+        try:
+            acquired_context.__enter__()
+        except TimeoutError as exc:
+            raise HTTPException(status_code=409, detail="同一任务正在生成图片，请稍后重试") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"图片任务锁不可用: {str(exc)[:200]}") from exc
+        try:
             record, image_tasks = build_image_plan(task_id)
             existing = record.state.get("image_assets", [])
             if not isinstance(existing, list):
@@ -360,7 +408,13 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
             new_count = 0
             try:
                 for item in pending[: body.max_new_images]:
-                    generated = client.generate_image(item["prompt"], allow_paid=True)
+                    metrics.increment("agent_external_calls_total", provider="image", operation="generate")
+                    try:
+                        generated = client.generate_image(item["prompt"], allow_paid=True)
+                    except Exception as exc:
+                        audit_usage(task_id=task_id, provider="image", operation="generate", status="failed", error_message=str(exc))
+                        raise
+                    audit_usage(task_id=task_id, provider="image", operation="generate", status="succeeded", actual_cost=None)
                     local_file = client.save_result(generated, output_dir, item["asset_key"])
                     assets.append(
                         {
@@ -402,6 +456,8 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
                 "remaining": remaining,
                 "assets": saved.state["image_assets"],
             }
+        finally:
+            acquired_context.__exit__(None, None, None)
 
     @app.get("/tasks/{task_id}/image-assets")
     def list_task_image_assets(task_id: str):
@@ -494,15 +550,32 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         if body.confirm_paid is not True:
             raise HTTPException(status_code=400, detail="请将 confirm_paid 设为 true，确认可能产生费用")
         try:
+            direct_lock = paid_lock("agent:paid:artclaw:direct", artclaw_submit_lock)
+            direct_lock.__enter__()
+        except TimeoutError as exc:
+            raise HTTPException(status_code=409, detail="已有 ArtClaw 提交正在进行，请稍后重试") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"ArtClaw 提交锁不可用: {str(exc)[:200]}") from exc
+        metrics.increment("agent_external_calls_total", provider="artclaw", operation="submit_video")
+        try:
             result = get_artclaw_client().submit_video(
                 body.prompt,
                 body.reference_urls,
                 duration_seconds=body.duration_seconds,
                 allow_paid=True,
             )
+            actual_cost = next(
+                (float(result[key]) for key in ("cost", "points", "credits", "consumed_points")
+                 if isinstance(result.get(key), (int, float)) and result.get(key) >= 0),
+                None,
+            )
+            audit_usage(task_id=None, provider="artclaw", operation="submit_video", status="succeeded", actual_cost=actual_cost)
             return result
-        except (ValueError, RuntimeError) as exc:
+        except (PermissionError, ValueError, RuntimeError) as exc:
+            audit_usage(task_id=None, provider="artclaw", operation="submit_video", status="failed", error_message=str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            direct_lock.__exit__(None, None, None)
 
     @app.get("/artclaw/videos/{job_id}")
     def get_artclaw_video(job_id: str):
@@ -544,7 +617,17 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         """把已完成的规划阶段分镜批量提交到 ArtClaw。"""
         if body.confirm_paid is not True:
             raise HTTPException(status_code=400, detail="请将 confirm_paid 设为 true，确认可能产生费用")
-        with artclaw_submit_lock:
+        try:
+            lock_context = paid_lock(f"agent:paid:artclaw:{task_id}", artclaw_submit_lock)
+            acquired_context = lock_context
+            acquired_context.__enter__()
+        except TimeoutError as exc:
+            raise HTTPException(status_code=409, detail="同一任务正在提交 ArtClaw，请稍后重试") from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=503, detail=f"付费任务锁配置异常: {exc}") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"ArtClaw 任务锁不可用: {str(exc)[:200]}") from exc
+        try:
             try:
                 record, storyboard, references_by_index, reference_preview = build_artclaw_reference_preview(task_id, body)
             except ValueError as exc:
@@ -564,12 +647,24 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
                     if not isinstance(shot, dict):
                         raise ValueError("分镜项必须是对象")
                     prompt = reference_preview[index - 1]["prompt"]
-                    result = client.submit_video(
-                        prompt,
-                        references_by_index[index],
-                        duration_seconds=body.duration_seconds,
-                        allow_paid=True,
-                    )
+                    metrics.increment("agent_external_calls_total", provider="artclaw", operation="submit_video")
+                    try:
+                        result = client.submit_video(
+                            prompt,
+                            references_by_index[index],
+                            duration_seconds=body.duration_seconds,
+                            allow_paid=True,
+                        )
+                    except Exception as exc:
+                        audit_usage(task_id=task_id, provider="artclaw", operation="submit_video", status="failed", error_message=str(exc))
+                        raise
+                    actual_cost = None
+                    for cost_key in ("cost", "points", "credits", "consumed_points"):
+                        value = result.get(cost_key) if isinstance(result, dict) else None
+                        if isinstance(value, (int, float)) and value >= 0:
+                            actual_cost = float(value)
+                            break
+                    audit_usage(task_id=task_id, provider="artclaw", operation="submit_video", status="succeeded", actual_cost=actual_cost)
                     preview_item = reference_preview[index - 1]
                     submitted.append(
                         {
@@ -596,6 +691,8 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
             agent._record_event(task_id, state, "artclaw_jobs_submitted", {"new_count": new_count, "remaining": remaining})
             saved = agent._save(record, record.status, state)
             return {"task_id": task_id, "new_count": new_count, "remaining": remaining, "jobs": saved.state["artclaw_jobs"]}
+        finally:
+            acquired_context.__exit__(None, None, None)
 
     @app.get("/tasks/{task_id}/artclaw-status")
     def get_task_artclaw_status(task_id: str):
@@ -719,6 +816,17 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
                 for record in records
             ]
         }
+
+    @app.get("/usage-audit")
+    def list_usage_audit(limit: int = 100):
+        try:
+            return {"records": agent.store.list_usage_audit(limit)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/metrics")
+    def metrics_endpoint():
+        return Response(content=metrics.render_prometheus(), media_type="text/plain; version=0.0.4")
 
     @app.post("/maintenance/cleanup")
     def cleanup_tasks(body: CleanupRequest):

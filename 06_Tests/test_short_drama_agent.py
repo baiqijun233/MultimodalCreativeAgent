@@ -8,6 +8,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "02_Source" / "multimodal_creativ
 sys.path.insert(0, str(SOURCE))
 
 from common.storage import TaskStore
+from integrations.redis_lock import RedisDistributedLock
 from common.assets import LocalAssetStore
 from common.events import InMemoryEventBus
 from async_runner import AsyncTaskRunner
@@ -814,6 +815,74 @@ class ShortDramaAgentTests(unittest.TestCase):
         finally:
             if old is not None:
                 os.environ["REDIS_URL"] = old
+
+    def test_usage_audit_persists_and_validates_costs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStore(Path(directory) / "tasks.db")
+            audit_id = store.record_usage_audit(
+                task_id="task-1",
+                provider="artclaw",
+                operation="submit_video",
+                status="succeeded",
+                actual_cost=24,
+            )
+            self.assertGreater(audit_id, 0)
+            rows = store.list_usage_audit()
+            self.assertEqual(rows[0]["task_id"], "task-1")
+            self.assertEqual(rows[0]["actual_cost"], 24.0)
+            with self.assertRaises(ValueError):
+                store.record_usage_audit(task_id=None, provider="x", operation="y", status="failed", actual_cost=-1)
+            store.close()
+
+    def test_redis_distributed_lock_only_releases_own_token(self):
+        class FakeRedis:
+            def __init__(self):
+                self.values = {}
+
+            def set(self, name, value, nx=False, ex=None):
+                if nx and name in self.values:
+                    return False
+                self.values[name] = value
+                return True
+
+            def eval(self, _script, _keys, name, token):
+                if self.values.get(name) == token:
+                    del self.values[name]
+                    return 1
+                return 0
+
+        client = FakeRedis()
+        first = RedisDistributedLock(client, "lock:test")
+        second = RedisDistributedLock(client, "lock:test")
+        self.assertTrue(first.acquire(blocking_timeout=0))
+        self.assertFalse(second.acquire(blocking_timeout=0))
+        client.values["lock:test"] = "someone-else"
+        self.assertFalse(first.release())
+        self.assertEqual(client.values["lock:test"], "someone-else")
+
+    def test_paid_calls_create_audit_and_metrics(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStore(Path(directory) / "tasks.db")
+            agent = ShortDramaAgent(store=store)
+            task_id = agent.create_task("生成三段短剧分镜").task_id
+            agent.run(task_id)
+            FakeArtClawClient.submit_count = 0
+            FakeArtClawClient.submissions = []
+            with patch("integrations.artclaw.ArtClawClient", FakeArtClawClient):
+                client = TestClient(create_fastapi_app(agent))
+                response = client.post(f"/tasks/{task_id}/artclaw-submit", json={"confirm_paid": True, "max_new_jobs": 1})
+                self.assertEqual(response.status_code, 200)
+                audit = client.get("/usage-audit").json()["records"]
+                self.assertEqual(audit[0]["provider"], "artclaw")
+                self.assertEqual(audit[0]["status"], "succeeded")
+                metrics = client.get("/metrics")
+                self.assertEqual(metrics.status_code, 200)
+                self.assertIn("agent_external_calls_total", metrics.text)
+            store.close()
 
     def test_celery_factory_reports_missing_configuration(self):
         import os

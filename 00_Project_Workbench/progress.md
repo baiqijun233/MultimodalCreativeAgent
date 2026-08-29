@@ -129,7 +129,7 @@
 - 新增 `POST /maintenance/cleanup`：默认只预览超过指定天数的旧任务；实际删除必须同时设置 `dry_run=false` 与 `confirm_delete=true`，并只删除对应任务目录，不触碰孤立资产目录。
 - 自动化测试由 26 项扩展到 27 项并全部通过，覆盖任务列表、清理预览、删除确认和孤立目录保留。
 - 云飞图片接口按用户确认记录为已完成正式使用；当前电脑没有密钥，本轮未重复调用外部服务。
-- 鉴权、多实例分布式锁、额度审计、生产监控、自动剪辑合成列入未来升级计划，本轮不实施。
+- 鉴权、限流、生产告警、自动剪辑合成列入未来升级计划；基础分布式付费锁、额度审计和指标已在后续加固中实现。
 
 ## 2026-08-29 - 正式外部链路验收
 
@@ -149,4 +149,21 @@
 - 新增上线适配清单 `05_Docs/上线适配清单.md`，明确服务器、持久化磁盘、密钥管理、HTTPS 和启动后的验收步骤；这些是环境适配，不需要改业务代码。
 - 本次正式验收暴露的 DeepSeek 结构化字段兼容、ArtClaw Cloudflare 403、容器路径返回和启动竞态问题均已处理，并分别补充测试或真实验证。
 - 自动化测试由 31 项扩展到 32 项并全部通过；最终 Docker API/Worker/Redis 运行正常，`/health=ok`、`/ready=ready`、网页控制台 HTTP 200、SQLite/Redis 检查通过、Celery `pong`。
-- 当前结论：代码侧已达到上线候选状态；正式上线仅剩目标服务器与密钥/域名/HTTPS/持久化等环境适配。公网鉴权、多实例分布式锁、额度审计、自动剪辑等继续列入未来升级计划。
+- 当前结论：代码侧已达到上线候选状态；正式上线仅剩目标服务器与密钥/域名/HTTPS/持久化等环境适配。公网鉴权、限流、生产告警、自动剪辑等继续列入未来升级计划。
+
+## 2026-08-29 - 额度审计与跨进程保护
+
+- 按当前需求暂缓对象存储，资产继续保存于本地 `/data` 持久化目录。
+- 新增 SQLite `usage_audit` 表与 `GET /usage-audit`，记录 ArtClaw/图片服务付费调用的供应商、操作、成功/失败、实际消耗（若接口返回）和错误摘要；不保存密钥、完整提示词或远程地址。
+- 新增 Redis `SET NX EX` 跨进程锁，付费提交配置 Redis 时按任务加锁；无 Redis 时回退原有线程锁。锁释放校验令牌，避免误删其他实例的锁。
+- 新增 `GET /metrics` 基础 Prometheus 文本指标，统计请求、外部调用、耗时和审计异常。
+- 直接单镜头 ArtClaw、批量 ArtClaw、图片生成均接入审计与指标；锁获取超时返回 409，不再产生未处理服务器异常。
+- 自动化测试由 32 项扩展到 35 项并全部通过；对象存储未实现，作为后续升级计划保留。
+
+## 2026-08-29 - 最终上线候选复核
+
+- 变更文件：`02_Source/multimodal_creative_agent/common/storage.py`、`common/metrics.py`、`integrations/redis_lock.py`、`short_drama_agent.py`、`06_Tests/test_short_drama_agent.py`，以及项目说明文档。
+- 验证：35 项 unittest 全部通过；Python 编译检查通过；Docker Compose 配置检查通过；API/Worker/Redis 镜像重建并启动成功。
+- 容器验收：`GET /health` 返回 `ok`，`GET /ready` 返回 `ready` 且 database/redis 均正常，`GET /metrics` 返回 Prometheus 文本，Celery Worker `ping` 返回 `pong`。
+- 额度策略：对象存储暂缓；付费调用按 ArtClaw/图片服务逐次写入 SQLite 审计，未知实际消耗保留为空，不伪造金额；本轮容器探针未调用付费接口，未新增额度消耗。
+- 备份：原源码保存在 `07_Logs/source_backup_20260829_105553`，可用于回退；未推送远程 Git。
