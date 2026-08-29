@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from common.storage import TaskRecord, TaskStore, utc_now
@@ -202,6 +203,7 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
         from pydantic import BaseModel, Field
         from integrations.artclaw import ArtClawClient, normalize_reference_urls
+        from integrations.image_provider import ImageProviderClient
     except ImportError as exc:
         raise RuntimeError("安装 fastapi 和 pydantic 后才能启用 HTTP 接口") from exc
 
@@ -222,11 +224,70 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         max_new_jobs: int = Field(default=3, ge=1, le=10)
         confirm_paid: bool = False
 
+    class ImageBatchRequest(BaseModel):
+        max_new_images: int = Field(default=4, ge=1, le=10)
+        confirm_paid: bool = False
+
     app = FastAPI(title="Multimodal Agent Demo")
     artclaw_submit_lock = threading.Lock()
+    image_generate_lock = threading.Lock()
 
     def get_artclaw_client() -> ArtClawClient:
         return ArtClawClient()
+
+    def get_image_provider_client() -> ImageProviderClient:
+        return ImageProviderClient()
+
+    def build_image_plan(task_id: str):
+        record = agent.store.get(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        plan = record.state.get("stage_results", {}).get("plan", {})
+        if not isinstance(plan, dict):
+            raise HTTPException(status_code=409, detail="任务尚未完成角色与场景规划")
+        characters = plan.get("characters", [])
+        scenes = plan.get("scenes", [])
+        if not isinstance(characters, list) or not isinstance(scenes, list) or (not characters and not scenes):
+            raise HTTPException(status_code=409, detail="任务尚未形成可生成的角色或场景清单")
+
+        request_text = str(record.state.get("request", "")).strip()[:5000]
+        image_tasks: list[dict[str, str]] = []
+        for index, character in enumerate(characters, start=1):
+            if isinstance(character, dict):
+                label = str(character.get("name") or f"角色{index}").strip()
+                details = "，".join(
+                    str(value).strip()
+                    for key, value in character.items()
+                    if key != "name" and value is not None and str(value).strip()
+                )[:2000]
+            else:
+                label = str(character).strip() or f"角色{index}"
+                details = ""
+            prompt = (
+                f"为短剧《{request_text}》制作角色设定参考图。角色：{label}。"
+                f"角色信息：{details or '按剧情设定补全'}。"
+                "单人全身正面站姿，面部、发型、服装和配色清晰，纯净中性背景，无文字、无水印，便于后续镜头保持角色一致。"
+            )
+            image_tasks.append({"asset_key": f"character-{index}", "kind": "character", "label": label, "prompt": prompt})
+
+        for index, scene in enumerate(scenes, start=1):
+            if isinstance(scene, dict):
+                label = str(scene.get("name") or scene.get("scene") or f"场景{index}").strip()
+                details = "，".join(
+                    str(value).strip()
+                    for key, value in scene.items()
+                    if key not in {"name", "scene"} and value is not None and str(value).strip()
+                )[:2000]
+            else:
+                label = str(scene).strip() or f"场景{index}"
+                details = ""
+            prompt = (
+                f"为短剧《{request_text}》制作场景设定参考图。场景：{label}。"
+                f"场景信息：{details or '按剧情设定补全'}。"
+                "空镜建立画面，空间布局、光线、材质和主色调明确，不出现人物，无文字、无水印，便于后续镜头保持场景一致。"
+            )
+            image_tasks.append({"asset_key": f"scene-{index}", "kind": "scene", "label": label, "prompt": prompt})
+        return record, image_tasks
 
     def add_reference_instructions(prompt: str, reference_count: int) -> str:
         if reference_count <= 0:
@@ -236,6 +297,104 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
             f"{prompt}\n参考图映射：{reference_tokens}。"
             "请严格保持参考图中的角色脸型、发型、服装、场景布局和整体视觉风格连续，不要随意替换。"
         )
+
+    @app.post("/tasks/{task_id}/image-preview")
+    def preview_task_images(task_id: str, body: ImageBatchRequest):
+        """免费预览图片任务清单，不调用外部图片服务。"""
+        record, image_tasks = build_image_plan(task_id)
+        existing = record.state.get("image_assets", [])
+        planned_keys = {item["asset_key"] for item in image_tasks}
+        existing_keys = {
+            item.get("asset_key")
+            for item in existing
+            if isinstance(item, dict) and item.get("asset_key") in planned_keys
+        } if isinstance(existing, list) else set()
+        preview = [{**item, "already_generated": item["asset_key"] in existing_keys} for item in image_tasks]
+        return {
+            "task_id": task_id,
+            "image_count": len(preview),
+            "already_generated": len(existing_keys),
+            "next_batch": min(body.max_new_images, max(0, len(preview) - len(existing_keys))),
+            "images": preview,
+        }
+
+    @app.post("/tasks/{task_id}/image-generate")
+    def generate_task_images(task_id: str, body: ImageBatchRequest):
+        """分批生成角色和场景参考图，成功一张就立即保存并落库。"""
+        if body.confirm_paid is not True:
+            raise HTTPException(status_code=400, detail="请将 confirm_paid 设为 true，确认图片生成可能产生费用")
+        with image_generate_lock:
+            record, image_tasks = build_image_plan(task_id)
+            existing = record.state.get("image_assets", [])
+            if not isinstance(existing, list):
+                raise HTTPException(status_code=409, detail="任务中的 image_assets 数据格式无效")
+            assets = [item for item in existing if isinstance(item, dict)]
+            planned_keys = {item["asset_key"] for item in image_tasks}
+            existing_keys = {item.get("asset_key") for item in assets if item.get("asset_key") in planned_keys}
+            pending = [item for item in image_tasks if item["asset_key"] not in existing_keys]
+            client = get_image_provider_client()
+            output_root = (
+                agent.asset_store.root
+                if agent.asset_store is not None
+                else Path(__file__).resolve().parents[2] / "04_Data" / "runtime" / "assets"
+            )
+            output_dir = output_root / task_id / "reference_images"
+            state = dict(record.state)
+            new_count = 0
+            try:
+                for item in pending[: body.max_new_images]:
+                    generated = client.generate_image(item["prompt"], allow_paid=True)
+                    local_file = client.save_result(generated, output_dir, item["asset_key"])
+                    assets.append(
+                        {
+                            "asset_key": item["asset_key"],
+                            "kind": item["kind"],
+                            "label": item["label"],
+                            "status": "saved",
+                            "local_file": str(local_file),
+                            "provider_model": str(generated.get("model") or "configured-provider"),
+                        }
+                    )
+                    new_count += 1
+                    existing_keys.add(item["asset_key"])
+                    state["image_assets"] = assets
+                    agent._save(record, record.status, state)
+            except (ValueError, TypeError, PermissionError, RuntimeError) as exc:
+                state["image_assets"] = assets
+                if new_count:
+                    agent._record_event(
+                        task_id,
+                        state,
+                        "image_assets_partial",
+                        {"new_count": new_count, "completed": len(assets), "error": str(exc)},
+                    )
+                    agent._save(record, record.status, state)
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            remaining = len(planned_keys - existing_keys)
+            state["image_assets"] = assets
+            agent._record_event(
+                task_id,
+                state,
+                "image_assets_generated",
+                {"new_count": new_count, "completed": len(assets), "remaining": remaining},
+            )
+            saved = agent._save(record, record.status, state)
+            return {
+                "task_id": task_id,
+                "new_count": new_count,
+                "remaining": remaining,
+                "assets": saved.state["image_assets"],
+            }
+
+    @app.get("/tasks/{task_id}/image-assets")
+    def list_task_image_assets(task_id: str):
+        record = agent.store.get(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        assets = record.state.get("image_assets", [])
+        if not isinstance(assets, list):
+            raise HTTPException(status_code=409, detail="任务中的 image_assets 数据格式无效")
+        return {"task_id": task_id, "assets": [item for item in assets if isinstance(item, dict)]}
 
     def build_artclaw_reference_preview(task_id: str, body: ArtClawBatchRequest):
         record = agent.store.get(task_id)
@@ -487,12 +646,14 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     def health():
         model_config = getattr(getattr(agent, "model", None), "client", None)
         model_config = getattr(model_config, "config", None)
+        image_key_env = os.getenv("IMAGE_API_KEY_ENV", "IMAGE_API_KEY")
         return {
             "status": "ok",
             "service": "multimodal-creative-agent",
             "model_provider": getattr(agent, "model_provider", "offline"),
             "model_name": getattr(model_config, "model", "deterministic-offline"),
             "artclaw_configured": bool(os.getenv("ARTCLAW_API_KEY_ACCOUNT_A") or os.getenv("ARTCLAW_API_KEY")),
+            "image_provider_configured": bool(os.getenv("IMAGE_API_BASE_URL") and os.getenv(image_key_env)),
         }
 
     @app.websocket("/ws/tasks/{task_id}")

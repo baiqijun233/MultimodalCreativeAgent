@@ -97,6 +97,20 @@ class FakeArtClawClient:
         return {"job_id": f"job-{self.submit_count}", "status": "pending"}
 
 
+class FakeImageProviderClient:
+    generate_count = 0
+
+    def generate_image(self, prompt, *, allow_paid):
+        self.__class__.generate_count += 1
+        return {"prompt": prompt, "sequence": self.generate_count, "allow_paid": allow_paid}
+
+    def save_result(self, result, output_dir, filename_stem):
+        target = Path(output_dir) / f"{filename_stem}.png"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\x89PNG\r\n\x1a\n" + str(result["sequence"]).encode("ascii"))
+        return target
+
+
 class StaticDeepSeekClient:
     def __init__(self, result):
         self.result = result
@@ -196,6 +210,47 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertEqual(config.resolution, "480p")
         self.assertFalse(config.generate_audio)
         self.assertEqual(config.aspect_ratio, "9:16")
+
+    def test_image_provider_blocks_paid_request_by_default_and_saves_base64(self):
+        import base64
+        import os
+
+        from integrations.image_provider import ImageProviderClient, ImageProviderConfig
+
+        encoded = base64.b64encode(b"\x89PNG\r\n\x1a\nimage-data").decode("ascii")
+
+        class ImageOpener(FakeOpener):
+            def __call__(self, request, timeout):
+                self.calls.append((request, timeout))
+                return FakeResponse({"data": [{"b64_json": encoded}]})
+
+        opener = ImageOpener()
+        old = os.environ.get("IMAGE_TEST_KEY")
+        os.environ["IMAGE_TEST_KEY"] = "test-only-key"
+        try:
+            config = ImageProviderConfig(base_url="https://images.example.com/v1", api_key_env="IMAGE_TEST_KEY")
+            client = ImageProviderClient(config, opener=opener)
+            with self.assertRaises(PermissionError):
+                client.generate_image("生成角色设定图")
+            self.assertEqual(opener.calls, [])
+            result = client.generate_image("生成角色设定图", allow_paid=True)
+            request, timeout = opener.calls[0]
+            import json
+
+            request_body = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(request.full_url, "https://images.example.com/v1/images/generations")
+            self.assertEqual(request_body["model"], "gpt-image-2")
+            self.assertEqual(request_body["size"], "1024x1024")
+            self.assertEqual(timeout, config.timeout_seconds)
+            with tempfile.TemporaryDirectory() as directory:
+                saved = client.save_result(result, directory, "character-1")
+                self.assertTrue(saved.exists())
+                self.assertTrue(saved.read_bytes().startswith(b"\x89PNG"))
+        finally:
+            if old is None:
+                os.environ.pop("IMAGE_TEST_KEY", None)
+            else:
+                os.environ["IMAGE_TEST_KEY"] = old
 
     def test_artclaw_client_rejects_local_reference_path(self):
         import os
@@ -347,11 +402,15 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertIn("/tasks/{task_id}/artclaw-submit", paths)
         self.assertIn("/tasks/{task_id}/artclaw-status", paths)
         self.assertIn("/tasks/{task_id}/artclaw-download", paths)
+        self.assertIn("/tasks/{task_id}/image-preview", paths)
+        self.assertIn("/tasks/{task_id}/image-generate", paths)
+        self.assertIn("/tasks/{task_id}/image-assets", paths)
         health = next(route for route in app.routes if route.path == "/health")
         self.assertEqual(health.endpoint()["status"], "ok")
         self.assertIn(health.endpoint()["model_provider"], {"deepseek", "offline"})
         self.assertIn("model_name", health.endpoint())
         self.assertIn("artclaw_configured", health.endpoint())
+        self.assertIn("image_provider_configured", health.endpoint())
 
     def test_artclaw_batch_submit_limits_and_reuses_jobs(self):
         try:
@@ -456,6 +515,105 @@ class ShortDramaAgentTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 400)
             self.assertIn("不存在的分镜编号", response.json()["detail"])
+            store.close()
+
+    def test_image_generation_plan_is_batched_persisted_and_idempotent(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStore(Path(directory) / "tasks.db")
+            agent = ShortDramaAgent(store=store, asset_store=LocalAssetStore(Path(directory) / "assets"))
+            task_id = agent.create_task("生成角色和三个场景的参考图").task_id
+            agent.run(task_id)
+            FakeImageProviderClient.generate_count = 0
+            with patch("integrations.image_provider.ImageProviderClient", FakeImageProviderClient):
+                client = TestClient(create_fastapi_app(agent))
+                preview = client.post(f"/tasks/{task_id}/image-preview", json={"max_new_images": 2})
+                self.assertEqual(preview.status_code, 200)
+                self.assertEqual(preview.json()["image_count"], 4)
+                self.assertEqual(FakeImageProviderClient.generate_count, 0)
+
+                blocked = client.post(f"/tasks/{task_id}/image-generate", json={"max_new_images": 2})
+                self.assertEqual(blocked.status_code, 400)
+                self.assertEqual(FakeImageProviderClient.generate_count, 0)
+
+                first = client.post(
+                    f"/tasks/{task_id}/image-generate",
+                    json={"confirm_paid": True, "max_new_images": 2},
+                )
+                self.assertEqual(first.status_code, 200)
+                self.assertEqual(first.json()["new_count"], 2)
+                self.assertEqual(first.json()["remaining"], 2)
+
+                second = client.post(
+                    f"/tasks/{task_id}/image-generate",
+                    json={"confirm_paid": True, "max_new_images": 2},
+                )
+                self.assertEqual(second.status_code, 200)
+                self.assertEqual(second.json()["new_count"], 2)
+                self.assertEqual(second.json()["remaining"], 0)
+
+                third = client.post(
+                    f"/tasks/{task_id}/image-generate",
+                    json={"confirm_paid": True, "max_new_images": 2},
+                )
+                self.assertEqual(third.status_code, 200)
+                self.assertEqual(third.json()["new_count"], 0)
+                self.assertEqual(FakeImageProviderClient.generate_count, 4)
+
+                assets = client.get(f"/tasks/{task_id}/image-assets")
+                self.assertEqual(assets.status_code, 200)
+                self.assertEqual(len(assets.json()["assets"]), 4)
+                self.assertTrue(all(Path(item["local_file"]).exists() for item in assets.json()["assets"]))
+                saved_state = store.get(task_id).state
+                self.assertNotIn("b64_json", str(saved_state))
+                self.assertNotIn("images.example.com", str(saved_state))
+            store.close()
+
+    def test_image_generation_failure_keeps_main_task_and_resumes_remaining_assets(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+
+        class FailSecondImageProviderClient(FakeImageProviderClient):
+            generate_count = 0
+            failed_once = False
+
+            def generate_image(self, prompt, *, allow_paid):
+                self.__class__.generate_count += 1
+                if self.generate_count == 2 and not self.__class__.failed_once:
+                    self.__class__.failed_once = True
+                    raise RuntimeError("模拟图片服务暂时失败")
+                return {"prompt": prompt, "sequence": self.generate_count, "allow_paid": allow_paid}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStore(Path(directory) / "tasks.db")
+            agent = ShortDramaAgent(store=store, asset_store=LocalAssetStore(Path(directory) / "assets"))
+            task_id = agent.create_task("生成可选角色和场景参考图").task_id
+            agent.run(task_id)
+            with patch("integrations.image_provider.ImageProviderClient", FailSecondImageProviderClient):
+                client = TestClient(create_fastapi_app(agent))
+                failed = client.post(
+                    f"/tasks/{task_id}/image-generate",
+                    json={"confirm_paid": True, "max_new_images": 4},
+                )
+                self.assertEqual(failed.status_code, 400)
+                after_failure = store.get(task_id)
+                self.assertEqual(after_failure.status, "succeeded")
+                self.assertEqual(len(after_failure.state["image_assets"]), 1)
+
+                resumed = client.post(
+                    f"/tasks/{task_id}/image-generate",
+                    json={"confirm_paid": True, "max_new_images": 4},
+                )
+                self.assertEqual(resumed.status_code, 200)
+                self.assertEqual(resumed.json()["new_count"], 3)
+                self.assertEqual(resumed.json()["remaining"], 0)
+                self.assertEqual(len({item["asset_key"] for item in resumed.json()["assets"]}), 4)
+                self.assertEqual(store.get(task_id).status, "succeeded")
             store.close()
 
     def test_redis_adapter_reports_missing_configuration(self):

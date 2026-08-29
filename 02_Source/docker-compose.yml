@@ -20,6 +20,10 @@ services:
       ARTCLAW_API_KEY_ACCOUNT_A: ${ARTCLAW_API_KEY_ACCOUNT_A:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      IMAGE_API_BASE_URL: ${IMAGE_API_BASE_URL:-}
+      IMAGE_API_KEY: ${IMAGE_API_KEY:-}
+      IMAGE_API_MODEL: ${IMAGE_API_MODEL:-gpt-image-2}
+      IMAGE_API_SIZE: ${IMAGE_API_SIZE:-1024x1024}
     volumes:
       - creative_data:/data
     ports:
@@ -40,6 +44,10 @@ services:
       ARTCLAW_API_KEY_ACCOUNT_A: ${ARTCLAW_API_KEY_ACCOUNT_A:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      IMAGE_API_BASE_URL: ${IMAGE_API_BASE_URL:-}
+      IMAGE_API_KEY: ${IMAGE_API_KEY:-}
+      IMAGE_API_MODEL: ${IMAGE_API_MODEL:-gpt-image-2}
+      IMAGE_API_SIZE: ${IMAGE_API_SIZE:-1024x1024}
     volumes:
       - creative_data:/data
     depends_on:

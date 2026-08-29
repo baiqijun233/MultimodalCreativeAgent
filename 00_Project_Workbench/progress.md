@@ -102,3 +102,15 @@
 - 新增 3 类测试：本地路径拒绝、逐分镜映射与默认兜底、越界分镜编号拒绝。项目自动化测试由 19 项扩展到 22 项并全部通过。
 - 最新源码临时启动离线 API 后，真实 HTTP 链路验证成功：创建并运行 3 分镜任务，预览来源依次为 `shot/default/shot`，每个分镜 1 张参考图；未执行任何付费提交。
 - Docker Hub 网络恢复后，最新 API/Worker 镜像已构建并重新创建容器；`8001` 健康检查显示 DeepSeek 与 ArtClaw 已配置，OpenAPI 已包含预览和提交路由，Celery Worker `ping` 返回 `pong`。
+
+## 2026-08-29 - 可选图片资产接口
+
+- 按用户确认的产品边界，将角色和场景图片生成实现为独立可选接口，不加入五阶段主状态机；未配置图片服务时，规划、分镜、ArtClaw、API 和 Worker 均可正常运行。
+- 新增兼容 `POST /images/generations` 的图片服务适配器，支持 `data[0].b64_json` 和公网 HTTPS `data[0].url`，默认模型 `gpt-image-2`、默认尺寸 `1024x1024`。
+- 新增 `image-preview`、`image-generate` 和 `image-assets` 三条任务接口；生成必须显式提交 `confirm_paid: true`，支持分批处理、成功即落盘和落库、重复调用跳过已完成项、中途失败后继续补剩余项。
+- 图片仅保存到任务的本地 `reference_images` 目录；密钥、Base64 原文和远程结果 URL 不写入 SQLite。下载限制为公网 HTTPS，文件限制为 25 MB，并校验 PNG、JPEG 或 WebP 文件签名。
+- 自动化测试由 22 项扩展到 25 项并全部通过，覆盖兼容请求格式、付费保护、Base64 落盘、路由注册、分批幂等和失败续跑；Python 编译、PowerShell 语法、Compose 配置和差异格式检查均通过。
+- 用本机临时 HTTP 兼容服务完成真实网络链路验证：平台成功请求 `/v1/images/generations`、接收 Base64 图片并落盘，主任务状态保持 `succeeded`；临时服务与文件已清理，未产生外部费用。
+- 最终 API/Worker 镜像已重建，3 个容器均运行；`GET /health` 返回正常且 `image_provider_configured=false`，OpenAPI 包含 3 条图片路由，未确认付费的生成请求返回 HTTP 400，Celery Worker 返回 `pong`。
+- 新增和修改文件敏感值扫描为 0，项目中没有 `.env` 文件。本轮没有调用 DeepSeek、图片服务或 ArtClaw 的真实计费生成接口。
+- 云飞服务的准确基础地址、鉴权方式和响应格式仍未获得，因此当前结论仅为“OpenAI 兼容图片接口已接入并运行通过”，不能表述为“云飞真实账号已验收”。

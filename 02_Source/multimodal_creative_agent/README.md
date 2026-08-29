@@ -22,7 +22,7 @@ python 02_Source\multimodal_creative_agent\demo.py
 
 ## 外部适配
 
-已提供可选适配代码：`integrations/artclaw.py`、`integrations/redis_backend.py`、`celery_worker.py` 和 FastAPI WebSocket 路由。ArtClaw 客户端支持账户查询、视频任务提交和任务查询；提交默认被阻止，只有显式 `allow_paid=True` 才会发起可能计费的请求。
+已提供可选适配代码：`integrations/artclaw.py`、`integrations/image_provider.py`、`integrations/redis_backend.py`、`celery_worker.py` 和 FastAPI WebSocket 路由。ArtClaw 与图片生成的付费提交默认都被阻止，只有接口请求明确包含 `confirm_paid: true` 时才会发起可能计费的请求。
 
 本地启动 Redis、API 和 Celery worker：
 
@@ -35,6 +35,18 @@ docker compose -f 02_Source\docker-compose.yml up --build
 ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）环境变量读取，禁止写入代码、`.env`、日志或 Git。默认采用低成本测试参数：4 秒、480p、9:16、关闭音频；可用 `ARTCLAW_MODEL`、`ARTCLAW_RESOLUTION`、`ARTCLAW_ASPECT_RATIO`、`ARTCLAW_GENERATE_AUDIO` 覆盖。真实提交必须显式传入 `allow_paid=True`。
 
 参考图必须是 ArtClaw 远程服务可以读取的公开 HTTPS 地址，单个分镜最多 9 张。本地文件路径、`localhost`、`.local` 域名和非公网 IP 地址会被拒绝。平台支持为每个分镜单独指定参考图；提交时会按图片顺序自动补充 `@图片1`、`@图片2` 等提示词，并增加角色外观、服装、场景和视觉风格连续性约束。参考图地址不会保存到 SQLite，只保存使用数量和来源类型，避免持久化可能带签名参数的地址。
+
+图片资产生成是可选补充，不属于五阶段主流程。未配置图片服务时，短剧规划、分镜和 ArtClaw 功能仍正常运行。适配器面向兼容 `POST /images/generations` 的服务，支持响应中的 `data[0].b64_json` 或公网 HTTPS `data[0].url`，图片会保存到本地资产目录；密钥、Base64 原文和远程下载地址不会写入 SQLite。
+
+需要启用时，在用户环境变量中配置以下项目，然后重新启动平台：
+
+```powershell
+[Environment]::SetEnvironmentVariable("IMAGE_API_BASE_URL", "https://你的服务地址/v1", "User")
+[Environment]::SetEnvironmentVariable("IMAGE_API_KEY", "你的密钥", "User")
+[Environment]::SetEnvironmentVariable("IMAGE_API_MODEL", "gpt-image-2", "User")
+```
+
+服务地址、鉴权方式和响应格式必须以实际供应商文档为准。当前已用本机兼容 HTTP 服务完成请求、响应、图片落盘和断点续跑验证；由于尚未取得云飞服务的准确协议，本项目不宣称已完成云飞真实账号调用。
 
 ## 独立运行与真实规划
 
@@ -64,8 +76,11 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 - `POST /tasks/{task_id}/artclaw-download`：批量下载已完成分镜到本地资产目录，未完成项会返回 `pending`。
 - `GET /artclaw/videos/{job_id}`：查询 ArtClaw 任务。
 - `POST /artclaw/videos/{job_id}/download`：将已完成视频下载到本地资产目录。
+- `POST /tasks/{task_id}/image-preview`：免费预览角色和场景图片任务，不调用图片服务。
+- `POST /tasks/{task_id}/image-generate`：按批次生成可选图片资产；必须包含 `confirm_paid: true`，已成功项不会重复生成。
+- `GET /tasks/{task_id}/image-assets`：查看已保存的本地图片资产元数据。
 
-`GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name` 和 `artclaw_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。
+`GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name`、`artclaw_configured` 和 `image_provider_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。
 
 逐分镜参考图预览示例：
 
