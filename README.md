@@ -5,6 +5,7 @@
 ### AI 多模态创作与短剧生成 Agent 平台
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](02_Source/requirements-optional.txt)
+[![CI](https://github.com/baiqijun233/MultimodalCreativeAgent/actions/workflows/tests.yml/badge.svg)](https://github.com/baiqijun233/MultimodalCreativeAgent/actions/workflows/tests.yml)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](02_Source/docker-compose.yml)
 [![Tests](https://img.shields.io/badge/tests-35%20passed-2ea44f)](06_Tests/test_short_drama_agent.py)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
