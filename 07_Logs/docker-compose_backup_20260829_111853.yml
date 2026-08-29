@@ -1,0 +1,80 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      TASK_DATABASE_PATH: /data/tasks.db
+      ASSET_ROOT: /data/assets
+      ARTCLAW_API_KEY_ACCOUNT_A: ${ARTCLAW_API_KEY_ACCOUNT_A:-}
+      ARTCLAW_BASE_URL: ${ARTCLAW_BASE_URL:-https://artclaw.com/api/v1}
+      ARTCLAW_MODEL: ${ARTCLAW_MODEL:-doubao-seedance-2-0-260128}
+      ARTCLAW_RESOLUTION: ${ARTCLAW_RESOLUTION:-480p}
+      ARTCLAW_ASPECT_RATIO: ${ARTCLAW_ASPECT_RATIO:-9:16}
+      ARTCLAW_GENERATE_AUDIO: ${ARTCLAW_GENERATE_AUDIO:-false}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_TIMEOUT_SECONDS: ${DEEPSEEK_TIMEOUT_SECONDS:-60}
+      IMAGE_API_BASE_URL: ${IMAGE_API_BASE_URL:-}
+      IMAGE_API_KEY: ${IMAGE_API_KEY:-}
+      IMAGE_API_MODEL: ${IMAGE_API_MODEL:-gpt-image-2}
+      IMAGE_API_SIZE: ${IMAGE_API_SIZE:-1024x1024}
+      IMAGE_API_TIMEOUT_SECONDS: ${IMAGE_API_TIMEOUT_SECONDS:-120}
+    volumes:
+      - creative_data:/data
+    ports:
+      - "127.0.0.1:${API_PORT:-8001}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: celery -A celery_worker:app worker --loglevel=INFO
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      TASK_DATABASE_PATH: /data/tasks.db
+      ASSET_ROOT: /data/assets
+      ARTCLAW_API_KEY_ACCOUNT_A: ${ARTCLAW_API_KEY_ACCOUNT_A:-}
+      ARTCLAW_BASE_URL: ${ARTCLAW_BASE_URL:-https://artclaw.com/api/v1}
+      ARTCLAW_MODEL: ${ARTCLAW_MODEL:-doubao-seedance-2-0-260128}
+      ARTCLAW_RESOLUTION: ${ARTCLAW_RESOLUTION:-480p}
+      ARTCLAW_ASPECT_RATIO: ${ARTCLAW_ASPECT_RATIO:-9:16}
+      ARTCLAW_GENERATE_AUDIO: ${ARTCLAW_GENERATE_AUDIO:-false}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_TIMEOUT_SECONDS: ${DEEPSEEK_TIMEOUT_SECONDS:-60}
+      IMAGE_API_BASE_URL: ${IMAGE_API_BASE_URL:-}
+      IMAGE_API_KEY: ${IMAGE_API_KEY:-}
+      IMAGE_API_MODEL: ${IMAGE_API_MODEL:-gpt-image-2}
+      IMAGE_API_SIZE: ${IMAGE_API_SIZE:-1024x1024}
+      IMAGE_API_TIMEOUT_SECONDS: ${IMAGE_API_TIMEOUT_SECONDS:-120}
+    volumes:
+      - creative_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  creative_data:
