@@ -79,6 +79,7 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 - `POST /tasks/{task_id}/image-preview`：免费预览角色和场景图片任务，不调用图片服务。
 - `POST /tasks/{task_id}/image-generate`：按批次生成可选图片资产；必须包含 `confirm_paid: true`，已成功项不会重复生成。
 - `GET /tasks/{task_id}/image-assets`：查看已保存的本地图片资产元数据。
+- `GET /tasks/{task_id}/image-assets/{asset_key}`：读取当前任务目录中的单张已保存图片；接口会拒绝目录外路径。
 
 `GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name`、`artclaw_configured` 和 `image_provider_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。
 

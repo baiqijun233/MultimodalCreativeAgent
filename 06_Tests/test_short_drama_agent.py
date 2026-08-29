@@ -405,6 +405,7 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertIn("/tasks/{task_id}/image-preview", paths)
         self.assertIn("/tasks/{task_id}/image-generate", paths)
         self.assertIn("/tasks/{task_id}/image-assets", paths)
+        self.assertIn("/tasks/{task_id}/image-assets/{asset_key}", paths)
         health = next(route for route in app.routes if route.path == "/health")
         self.assertEqual(health.endpoint()["status"], "ok")
         self.assertIn(health.endpoint()["model_provider"], {"deepseek", "offline"})
@@ -567,9 +568,36 @@ class ShortDramaAgentTests(unittest.TestCase):
                 self.assertEqual(assets.status_code, 200)
                 self.assertEqual(len(assets.json()["assets"]), 4)
                 self.assertTrue(all(Path(item["local_file"]).exists() for item in assets.json()["assets"]))
+                downloaded = client.get(f"/tasks/{task_id}/image-assets/character-1")
+                self.assertEqual(downloaded.status_code, 200)
+                self.assertTrue(downloaded.content.startswith(b"\x89PNG"))
+                self.assertEqual(client.get(f"/tasks/{task_id}/image-assets/missing").status_code, 404)
                 saved_state = store.get(task_id).state
                 self.assertNotIn("b64_json", str(saved_state))
                 self.assertNotIn("images.example.com", str(saved_state))
+            store.close()
+
+    def test_image_asset_download_rejects_path_outside_task_directory(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = TaskStore(root / "tasks.db")
+            asset_store = LocalAssetStore(root / "assets")
+            agent = ShortDramaAgent(store=store, asset_store=asset_store)
+            task_id = agent.create_task("测试图片路径隔离").task_id
+            record = store.get(task_id)
+            outside = root / "outside.png"
+            outside.write_bytes(b"\x89PNG\r\n\x1a\noutside")
+            record.state["image_assets"] = [
+                {"asset_key": "escape", "status": "saved", "local_file": str(outside)}
+            ]
+            store.save(record)
+            client = TestClient(create_fastapi_app(agent))
+            response = client.get(f"/tasks/{task_id}/image-assets/escape")
+            self.assertEqual(response.status_code, 403)
             store.close()
 
     def test_image_generation_failure_keeps_main_task_and_resumes_remaining_assets(self):

@@ -201,6 +201,7 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     """Optional FastAPI adapter; imported only when the dependency is present."""
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+        from fastapi.responses import FileResponse
         from pydantic import BaseModel, Field
         from integrations.artclaw import ArtClawClient, normalize_reference_urls
         from integrations.image_provider import ImageProviderClient
@@ -395,6 +396,43 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         if not isinstance(assets, list):
             raise HTTPException(status_code=409, detail="任务中的 image_assets 数据格式无效")
         return {"task_id": task_id, "assets": [item for item in assets if isinstance(item, dict)]}
+
+    @app.get("/tasks/{task_id}/image-assets/{asset_key}")
+    def download_task_image_asset(task_id: str, asset_key: str):
+        """只读返回当前任务已保存的单张图片，禁止借此访问其他路径。"""
+        record = agent.store.get(task_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        assets = record.state.get("image_assets", [])
+        if not isinstance(assets, list):
+            raise HTTPException(status_code=409, detail="任务中的 image_assets 数据格式无效")
+        matched = next(
+            (
+                item
+                for item in assets
+                if isinstance(item, dict) and item.get("asset_key") == asset_key and item.get("status") == "saved"
+            ),
+            None,
+        )
+        if matched is None:
+            raise HTTPException(status_code=404, detail="图片资产不存在")
+        local_file = matched.get("local_file")
+        if not isinstance(local_file, str) or not local_file.strip():
+            raise HTTPException(status_code=409, detail="图片资产缺少本地文件路径")
+        output_root = (
+            agent.asset_store.root
+            if agent.asset_store is not None
+            else Path(__file__).resolve().parents[2] / "04_Data" / "runtime" / "assets"
+        )
+        task_asset_dir = (output_root / task_id / "reference_images").resolve()
+        candidate = Path(local_file).expanduser().resolve()
+        try:
+            candidate.relative_to(task_asset_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="图片资产路径不属于当前任务目录") from exc
+        if not candidate.is_file():
+            raise HTTPException(status_code=404, detail="图片文件不存在")
+        return FileResponse(candidate)
 
     def build_artclaw_reference_preview(task_id: str, body: ArtClawBatchRequest):
         record = agent.store.get(task_id)
