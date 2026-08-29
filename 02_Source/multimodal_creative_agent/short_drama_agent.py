@@ -203,7 +203,7 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
         from fastapi.responses import FileResponse
-        from fastapi.responses import HTMLResponse, Response
+        from fastapi.responses import HTMLResponse, JSONResponse, Response
         from pydantic import BaseModel, Field
         from integrations.artclaw import ArtClawClient, normalize_reference_urls
         from integrations.image_provider import ImageProviderClient
@@ -772,6 +772,26 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
             "artclaw_configured": bool(os.getenv("ARTCLAW_API_KEY_ACCOUNT_A") or os.getenv("ARTCLAW_API_KEY")),
             "image_provider_configured": bool(os.getenv("IMAGE_API_BASE_URL") and os.getenv(image_key_env)),
         }
+
+    @app.get("/ready")
+    def ready():
+        """只检查本地核心依赖是否可用，不主动调用付费外部服务。"""
+        checks: dict[str, dict[str, Any]] = {}
+        try:
+            checks["database"] = {"ok": bool(agent.store.ping())}
+        except Exception as exc:
+            checks["database"] = {"ok": False, "error": str(exc)[:200]}
+        state_cache = getattr(agent, "state_cache", None)
+        if state_cache is not None and hasattr(state_cache, "client"):
+            try:
+                checks["redis"] = {"ok": bool(state_cache.client.ping())}
+            except Exception as exc:
+                checks["redis"] = {"ok": False, "error": str(exc)[:200]}
+        else:
+            checks["redis"] = {"ok": True, "mode": "not_configured"}
+        ready_ok = all(item.get("ok") is True for item in checks.values())
+        result = {"status": "ready" if ready_ok else "not_ready", "checks": checks}
+        return JSONResponse(status_code=200 if ready_ok else 503, content=result)
 
     @app.websocket("/ws/tasks/{task_id}")
     async def task_websocket(websocket: WebSocket, task_id: str):

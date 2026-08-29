@@ -90,6 +90,12 @@ class TaskStore:
             self._connection.commit()
         return cursor.rowcount > 0
 
+    def ping(self) -> bool:
+        """执行最小数据库读操作，供就绪检查使用。"""
+        with self._lock:
+            self._connection.execute("SELECT 1").fetchone()
+        return True
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()

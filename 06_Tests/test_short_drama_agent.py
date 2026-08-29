@@ -488,6 +488,7 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertIn("/favicon.ico", paths)
         self.assertIn("/tasks", paths)
         self.assertIn("/maintenance/cleanup", paths)
+        self.assertIn("/ready", paths)
         self.assertIn("/tasks/{task_id}/events", paths)
         self.assertIn("/ws/tasks/{task_id}", paths)
         self.assertIn("/artclaw/videos", paths)
@@ -505,6 +506,32 @@ class ShortDramaAgentTests(unittest.TestCase):
         self.assertIn("model_name", health.endpoint())
         self.assertIn("artclaw_configured", health.endpoint())
         self.assertIn("image_provider_configured", health.endpoint())
+        ready = next(route for route in app.routes if route.path == "/ready")
+        import json
+
+        self.assertEqual(json.loads(ready.endpoint().body)["status"], "ready")
+
+    def test_ready_returns_not_ready_when_redis_ping_fails(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+
+        class BrokenRedis:
+            def ping(self):
+                raise OSError("模拟 Redis 断开")
+
+        class StateCache:
+            client = BrokenRedis()
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStore(Path(directory) / "tasks.db")
+            agent = ShortDramaAgent(store=store, state_cache=StateCache())
+            response = TestClient(create_fastapi_app(agent)).get("/ready")
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()["status"], "not_ready")
+            self.assertFalse(response.json()["checks"]["redis"]["ok"])
+            store.close()
 
     def test_artclaw_batch_submit_limits_and_reuses_jobs(self):
         try:

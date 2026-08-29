@@ -30,7 +30,7 @@ python 02_Source\multimodal_creative_agent\demo.py
 docker compose -f 02_Source\docker-compose.yml up --build
 ```
 
-启动后默认可访问 `http://localhost:8001/health`，WebSocket 地址为 `ws://localhost:8001/ws/tasks/{task_id}`；如需其他端口可设置 `API_PORT`。不需要 Redis 时，直接运行 `demo.py` 仍使用 SQLite、线程池和本地资产目录。
+启动后默认可访问 `http://localhost:8001/health` 和 `http://localhost:8001/ready`，网页控制台为 `http://localhost:8001/`，WebSocket 地址为 `ws://localhost:8001/ws/tasks/{task_id}`；如需其他端口可设置 `API_PORT`。不需要 Redis 时，直接运行 `demo.py` 仍使用 SQLite、线程池和本地资产目录。
 
 ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）环境变量读取，禁止写入代码、`.env`、日志或 Git。默认采用低成本测试参数：4 秒、480p、9:16、关闭音频；可用 `ARTCLAW_MODEL`、`ARTCLAW_RESOLUTION`、`ARTCLAW_ASPECT_RATIO`、`ARTCLAW_GENERATE_AUDIO` 覆盖。真实提交必须显式传入 `allow_paid=True`。
 
@@ -84,7 +84,9 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 - `GET /tasks`：按更新时间查看任务列表。
 - `POST /maintenance/cleanup`：预览或确认清理过期任务及其资产目录。
 
-`GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name`、`artclaw_configured` 和 `image_provider_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。
+`GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name`、`artclaw_configured` 和 `image_provider_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。`GET /ready` 会检查 SQLite 和已配置的 Redis 是否可用，适合 Docker、反向代理或云平台健康探测；它不会主动调用 DeepSeek、ArtClaw 或图片生成服务。
+
+当前代码已达到上线候选状态；正式上线只差目标服务器、持久化磁盘、Redis、HTTPS/域名和密钥管理的环境适配。具体步骤见 `05_Docs/上线适配清单.md`。
 
 逐分镜参考图预览示例：
 
