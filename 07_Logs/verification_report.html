@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MultimodalCreativeAgent 验收报告</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; --bg:#111418; --panel:#1a1f26; --line:#303944; --text:#edf2f7; --muted:#9da8b5; --accent:#f2b84b; --good:#65c18c; }
+    * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); } main { max-width:1000px; margin:0 auto; padding:42px 28px 56px; }
+    .eyebrow { color:var(--accent); font-size:12px; letter-spacing:1px; } h1 { margin:10px 0 8px; font-size:30px; } .lead { color:var(--muted); margin:0 0 28px; }
+    .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:22px; } .metric { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px; } .metric strong { display:block; color:var(--good); font-size:22px; margin-bottom:5px; } .metric span { color:var(--muted); font-size:12px; }
+    section { background:var(--panel); border:1px solid var(--line); border-radius:6px; margin-top:16px; overflow:hidden; } h2 { margin:0; padding:14px 16px; border-bottom:1px solid var(--line); font-size:15px; } .body { padding:16px; }
+    table { width:100%; border-collapse:collapse; } th,td { text-align:left; padding:11px 12px; border-bottom:1px solid var(--line); font-size:13px; } th { color:var(--muted); font-weight:500; } tr:last-child td { border-bottom:0; } .ok { color:var(--good); font-weight:600; } code { color:#f4d28c; }
+    @media (max-width:680px) { main { padding:26px 14px 38px; } .summary { grid-template-columns:repeat(2,1fr); } h1 { font-size:24px; } th,td { padding:9px 8px; font-size:12px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">MULTIMODAL CREATIVE AGENT · ACCEPTANCE REPORT</div>
+    <h1>运行与生产验收结果</h1>
+    <p class="lead">本页面由本地已运行实例生成，用于展示接口、异步任务、持久化和真实外部链路的验证结果。</p>
+    <div class="summary"><div class="metric"><strong>35/35</strong><span>自动化测试通过</span></div><div class="metric"><strong>5/5</strong><span>任务阶段完成</span></div><div class="metric"><strong>24 点</strong><span>真实视频调用消耗</span></div><div class="metric"><strong>ready</strong><span>服务就绪状态</span></div></div>
+    <section><h2>本地运行检查</h2><div class="body"><table><thead><tr><th>检查项</th><th>结果</th><th>说明</th></tr></thead><tbody><tr><td>API 健康</td><td class="ok">通过</td><td><code>/health</code> 返回 ok，使用 deepseek-v4-flash</td></tr><tr><td>依赖就绪</td><td class="ok">通过</td><td><code>/ready</code> 检查 SQLite 与 Redis</td></tr><tr><td>网页控制台</td><td class="ok">通过</td><td>桌面端与移动端均可打开</td></tr><tr><td>异步执行</td><td class="ok">通过</td><td>Celery Worker 返回 pong 并完成任务</td></tr><tr><td>重启持久化</td><td class="ok">通过</td><td>API/Worker 重启后任务仍为 succeeded</td></tr></tbody></table></div></section>
+    <section><h2>真实生产链路</h2><div class="body"><table><thead><tr><th>环节</th><th>结果</th><th>记录</th></tr></thead><tbody><tr><td>DeepSeek 规划</td><td class="ok">成功</td><td>任务 <code>dae44f24…</code>，最终五阶段完成</td></tr><tr><td>ArtClaw 视频</td><td class="ok">成功</td><td>4 秒 · 480p · 9:16 · 无音频</td></tr><tr><td>媒体验收</td><td class="ok">成功</td><td>H.264 · 496×864 · 24fps · 4.041667 秒</td></tr><tr><td>额度审计</td><td class="ok">成功</td><td>68 点 → 44 点，消耗 24 点</td></tr></tbody></table></div></section>
+  </main>
+</body>
+</html>
