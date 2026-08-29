@@ -7,3 +7,4 @@
 - 增加 Redis 跨进程付费锁、SQLite 额度审计和 Prometheus 指标。
 - 完成 Docker 独立运行、重启持久化和真实低成本生产链路验收。
 - 当前仍需在目标服务器配置密钥、域名、HTTPS、持久化磁盘和公网鉴权。
+- 固定 FastAPI/Starlette/HTTPX 兼容范围，保证本地与 GitHub Actions 的测试客户端一致。

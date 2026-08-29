@@ -103,7 +103,7 @@ Set-Location 02_Source
 .\run_platform.ps1
 ```
 
-需要 Python 3.11+、FastAPI、Uvicorn、Redis 客户端和 Celery。完整依赖见 [requirements-optional.txt](02_Source/requirements-optional.txt)。
+需要 Python 3.11+、FastAPI、Uvicorn、Redis 客户端、Celery 和 HTTPX 测试客户端。依赖版本已固定在已验证的兼容范围，完整清单见 [requirements-optional.txt](02_Source/requirements-optional.txt)。
 
 ## 🔐 配置
 
