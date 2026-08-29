@@ -167,3 +167,14 @@
 - 容器验收：`GET /health` 返回 `ok`，`GET /ready` 返回 `ready` 且 database/redis 均正常，`GET /metrics` 返回 Prometheus 文本，Celery Worker `ping` 返回 `pong`。
 - 额度策略：对象存储暂缓；付费调用按 ArtClaw/图片服务逐次写入 SQLite 审计，未知实际消耗保留为空，不伪造金额；本轮容器探针未调用付费接口，未新增额度消耗。
 - 备份：原源码保存在 `07_Logs/source_backup_20260829_105553`，可用于回退；未推送远程 Git。
+
+## 2026-08-29 - 独立运行完整验收
+
+- 发现并修复：Docker Compose 补充透传 `MODEL_PROVIDER`，可在无 DeepSeek 密钥时设置 `MODEL_PROVIDER=offline` 完成独立验收。
+- 使用 `MODEL_PROVIDER=offline` 重建 API/Worker 镜像并启动 Redis、API、Worker。
+- API 验证：`/health=ok`，模型提供方为 `offline`；`/ready=ready`，database/redis 均正常；网页控制台 `/` 返回 200；`/metrics` 可返回指标；`/usage-audit` 正常返回。
+- 端到端验证：通过 `POST /tasks/async` 创建任务，由 Celery Worker 执行；任务最终 `succeeded`，五阶段 `analyze/plan/validate/assets/finalize` 全部完成，任务列表可查询。
+- 持久化验证：重启 API/Worker 后，任务仍保持 `succeeded`，`/ready` 仍为 `ready`，确认 SQLite 与 `/data` 持久化有效。
+- 自动化验证：35 项 unittest 全部通过，Python 编译检查、Compose 配置检查和差异检查通过。
+- 本轮未调用 DeepSeek、ArtClaw 或图片生成，不产生外部额度消耗。
+- PowerShell 复核中曾误用保留变量 `$HOME`，已改用 `$dashboardStatus` 重新执行，项目代码无影响。

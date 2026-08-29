@@ -90,6 +90,7 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 
 当前代码已达到上线候选状态；正式上线只差目标服务器、持久化磁盘、Redis、HTTPS/域名和密钥管理的环境适配。具体步骤见 `05_Docs/上线适配清单.md`。
 配置 Redis 后，ArtClaw 和图片生成的付费提交使用跨进程锁；无 Redis 时回退单进程线程锁。对象存储暂缓，资产默认保存到 `/data`。
+Docker Compose 支持通过 `MODEL_PROVIDER=offline` 强制离线模型，适合没有 DeepSeek 密钥时验证独立运行；默认值为 `deepseek`。
 
 逐分镜参考图预览示例：
 
