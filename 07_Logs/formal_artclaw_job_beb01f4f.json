@@ -1,0 +1,43 @@
+{
+  "job_id": "beb01f4f-988a-4f8d-9b2e-e5e42e65646f",
+  "type": "video_generation",
+  "status": "success",
+  "created_at": "2026-08-29T02:20:42.660005Z",
+  "updated_at": "2026-08-29T02:23:49.193288Z",
+  "metadata": {},
+  "result": {
+    "job_id": "beb01f4f-988a-4f8d-9b2e-e5e42e65646f",
+    "status": "success",
+    "stage": "",
+    "url": "https://assets.vicoo.ai/genai/upload/1826/beb01f4f-988a-4f8d-9b2e-e5e42e65646f.mp4",
+    "urls": null,
+    "music_details": null,
+    "lyrics_candidates": null,
+    "multiview_images": null,
+    "text": "",
+    "vocal_audio_url": "",
+    "bgm_audio_url": "",
+    "subtitle_url": "",
+    "translated_subtitle_url": "",
+    "speaker_url": "",
+    "error": "",
+    "error_code": 0,
+    "compressed_url": "",
+    "model": "",
+    "files": null,
+    "animation_result": null,
+    "volc_task_response": {
+      "id": "beb01f4f-988a-4f8d-9b2e-e5e42e65646f",
+      "model": "doubao-seedance-2-0-260128",
+      "status": "succeeded",
+      "content": {
+        "video_url": "https://assets.vicoo.ai/genai/upload/1826/beb01f4f-988a-4f8d-9b2e-e5e42e65646f.mp4"
+      },
+      "created_at": 1787970042,
+      "updated_at": 1787970207,
+      "resolution": "480p",
+      "ratio": "9:16",
+      "duration": 4
+    }
+  }
+}

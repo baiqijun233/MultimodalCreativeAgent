@@ -638,7 +638,14 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
                     pending.append({"shot_index": item.get("shot_index"), "job_id": item.get("job_id"), "status": remote.get("status")})
                     continue
                 path = client.download_result(remote, asset_root)
-                downloaded.append({"shot_index": item.get("shot_index"), "job_id": item.get("job_id"), "local_file": str(path)})
+                downloaded.append(
+                    {
+                        "shot_index": item.get("shot_index"),
+                        "job_id": item.get("job_id"),
+                        "local_file": str(path),
+                        "download_url": f"/artclaw/videos/{item.get('job_id')}/download",
+                    }
+                )
             except (ValueError, RuntimeError) as exc:
                 pending.append({"shot_index": item.get("shot_index"), "job_id": item.get("job_id"), "status": "download_failed", "error": str(exc)})
         return {"task_id": task_id, "downloaded": downloaded, "pending": pending}
@@ -652,7 +659,12 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
                 raise HTTPException(status_code=409, detail="视频尚未生成完成，请稍后重试")
             asset_root = agent.asset_store.root if agent.asset_store is not None else Path(__file__).resolve().parents[2] / "04_Data" / "runtime" / "assets"
             path = client.download_result(job, asset_root)
-            return {"job_id": job_id, "status": "downloaded", "local_file": str(path)}
+            return {
+                "job_id": job_id,
+                "status": "downloaded",
+                "local_file": str(path),
+                "download_url": f"/artclaw/videos/{job_id}/download",
+            }
         except HTTPException:
             raise
         except (ValueError, RuntimeError) as exc:

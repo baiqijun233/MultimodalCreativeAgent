@@ -75,7 +75,7 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 - `GET /tasks/{task_id}/artclaw-status`：统一查询该任务下所有分镜的 ArtClaw 状态。
 - `POST /tasks/{task_id}/artclaw-download`：批量下载已完成分镜到本地资产目录，未完成项会返回 `pending`。
 - `GET /artclaw/videos/{job_id}`：查询 ArtClaw 任务。
-- `POST /artclaw/videos/{job_id}/download`：将已完成视频下载到本地资产目录。
+- `POST /artclaw/videos/{job_id}/download`：将已完成视频下载到本地资产目录，并返回稳定的 `download_url`；`local_file` 是运行环境内部路径。
 - `POST /tasks/{task_id}/image-preview`：免费预览角色和场景图片任务，不调用图片服务。
 - `POST /tasks/{task_id}/image-generate`：按批次生成可选图片资产；必须包含 `confirm_paid: true`，已成功项不会重复生成。
 - `GET /tasks/{task_id}/image-assets`：查看已保存的本地图片资产元数据。

@@ -90,7 +90,12 @@ class ArtClawClient:
             f"{self.config.base_url}{path}",
             data=payload,
             method=method.upper(),
-            headers={"X-API-KEY": self._api_key(), "Accept": "application/json", "Content-Type": "application/json"},
+            headers={
+                "X-API-KEY": self._api_key(),
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "MultimodalCreativeAgent/1.0",
+            },
         )
         try:
             with self._opener(request, timeout=self.config.timeout_seconds) as response:
@@ -162,7 +167,8 @@ class ArtClawClient:
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / f"artclaw_{job_id}.mp4"
         try:
-            with self._opener(url, timeout=self.config.timeout_seconds) as response:
+            request = Request(url, headers={"Accept": "video/mp4", "User-Agent": "MultimodalCreativeAgent/1.0"})
+            with self._opener(request, timeout=self.config.timeout_seconds) as response:
                 data = response.read()
         except (HTTPError, URLError, OSError) as exc:
             raise RuntimeError(f"ArtClaw 视频下载失败: {exc}") from exc

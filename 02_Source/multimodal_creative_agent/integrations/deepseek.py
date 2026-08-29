@@ -130,14 +130,28 @@ class DeepSeekModel:
         if stage == "plan" and not all(name in result for name in ("characters", "scenes", "storyboard", "asset_types")):
             raise RuntimeError("DeepSeek plan 结果缺少必要字段")
         if stage == "plan":
-            if not all(isinstance(result[name], list) for name in ("characters", "scenes", "storyboard", "asset_types")):
+            if not all(isinstance(result[name], list) for name in ("characters", "scenes", "storyboard")):
+                raise RuntimeError("DeepSeek plan 字段类型不正确")
+            if isinstance(result.get("asset_types"), str) and result["asset_types"].strip():
+                result["asset_types"] = [result["asset_types"].strip()]
+            elif not isinstance(result.get("asset_types"), list):
                 raise RuntimeError("DeepSeek plan 字段类型不正确")
             if not all(result[name] for name in ("characters", "scenes", "storyboard", "asset_types")):
                 raise RuntimeError("DeepSeek plan 结果不能为空")
             if not all(isinstance(item, dict) and str(item.get("name", "")).strip() for item in result["characters"]):
                 raise RuntimeError("DeepSeek plan 的角色项必须包含非空 name")
-            if not all(isinstance(item, str) and item.strip() for item in result["scenes"]):
-                raise RuntimeError("DeepSeek plan 的场景必须是非空字符串")
+            normalized_scenes = []
+            for item in result["scenes"]:
+                if isinstance(item, str) and item.strip():
+                    normalized_scenes.append(item.strip())
+                    continue
+                if isinstance(item, dict):
+                    scene_name = str(item.get("name") or item.get("scene") or item.get("title") or "").strip()
+                    if scene_name:
+                        normalized_scenes.append(scene_name)
+                        continue
+                raise RuntimeError("DeepSeek plan 的场景必须包含非空名称")
+            result["scenes"] = normalized_scenes
             if len(result["scenes"]) != len(result["storyboard"]):
                 raise RuntimeError("DeepSeek plan 场景数与分镜数不一致")
             required_shot_fields = ("scene", "shot", "prompt")

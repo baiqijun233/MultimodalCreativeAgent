@@ -62,6 +62,20 @@ class FakeResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
+class FakeResponseBytes:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.payload
+
+
 class FakeOpener:
     def __init__(self):
         self.calls = []
@@ -203,6 +217,7 @@ class ShortDramaAgentTests(unittest.TestCase):
         result = client.submit_video("生成一个镜头", duration_seconds=4, allow_paid=True)
         self.assertEqual(result["job_id"], "job-demo")
         self.assertEqual(len(opener.calls), 1)
+        self.assertEqual(opener.calls[0][0].get_header("User-agent"), "MultimodalCreativeAgent/1.0")
         del os.environ["ARTCLAW_TEST_KEY"]
 
     def test_artclaw_config_uses_low_cost_defaults(self):
@@ -272,6 +287,59 @@ class ShortDramaAgentTests(unittest.TestCase):
                 os.environ.pop("ARTCLAW_TEST_KEY", None)
             else:
                 os.environ["ARTCLAW_TEST_KEY"] = old
+
+    def test_artclaw_download_uses_application_user_agent(self):
+        import os
+
+        class DownloadOpener:
+            def __init__(self):
+                self.request = None
+
+            def __call__(self, request, timeout):
+                self.request = request
+                return FakeResponseBytes(b"video-bytes")
+
+        opener = DownloadOpener()
+        old = os.environ.get("ARTCLAW_TEST_KEY")
+        os.environ["ARTCLAW_TEST_KEY"] = "test-only-key"
+        try:
+            client = ArtClawClient(ArtClawConfig(api_key_env="ARTCLAW_TEST_KEY"), opener=opener)
+            with tempfile.TemporaryDirectory() as directory:
+                path = client.download_result(
+                    {"job_id": "job-download", "result": {"url": "https://assets.vicoo.ai/video.mp4"}},
+                    directory,
+                )
+                self.assertTrue(path.exists())
+                self.assertEqual(opener.request.get_header("User-agent"), "MultimodalCreativeAgent/1.0")
+        finally:
+            if old is None:
+                os.environ.pop("ARTCLAW_TEST_KEY", None)
+            else:
+                os.environ["ARTCLAW_TEST_KEY"] = old
+
+    def test_artclaw_download_route_exposes_stable_download_url(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+
+        class FakeClient:
+            def get_job(self, job_id):
+                return {"job_id": job_id, "status": "success", "result": {"url": "https://assets.vicoo.ai/video.mp4"}}
+
+            def download_result(self, _job, output_dir):
+                target = Path(output_dir) / "artclaw_job-route.mp4"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"video-bytes")
+                return target
+
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShortDramaAgent(store=TaskStore(Path(directory) / "tasks.db"), asset_store=LocalAssetStore(Path(directory) / "assets"))
+            with patch("integrations.artclaw.ArtClawClient", FakeClient):
+                response = TestClient(create_fastapi_app(agent)).post("/artclaw/videos/job-route/download")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["download_url"], "/artclaw/videos/job-route/download")
+            agent.store.close()
 
     def test_deepseek_model_parses_structured_json(self):
         import os
@@ -349,6 +417,27 @@ class ShortDramaAgentTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(RuntimeError, "场景数与分镜数不一致"):
             DeepSeekModel(StaticDeepSeekClient(result)).generate("plan", {})
+
+    def test_deepseek_plan_accepts_structured_scene_objects_and_normalizes_names(self):
+        result = {
+            "characters": [{"name": "主角"}],
+            "scenes": [{"name": "夜街", "location": "霓虹街道"}],
+            "storyboard": [{"scene": "夜街", "shot": "全景", "prompt": "主角走过霓虹街道"}],
+            "asset_types": ["image", "video"],
+        }
+        normalized = DeepSeekModel(StaticDeepSeekClient(result)).generate("plan", {})
+        self.assertEqual(normalized["scenes"], ["夜街"])
+        self.assertEqual(normalized["storyboard"][0]["scene"], "夜街")
+
+    def test_deepseek_plan_accepts_single_asset_type_string(self):
+        result = {
+            "characters": [{"name": "主角"}],
+            "scenes": ["夜街"],
+            "storyboard": [{"scene": "夜街", "shot": "全景", "prompt": "主角走过街道"}],
+            "asset_types": "video",
+        }
+        normalized = DeepSeekModel(StaticDeepSeekClient(result)).generate("plan", {})
+        self.assertEqual(normalized["asset_types"], ["video"])
 
     def test_deepseek_plan_rejects_unsupported_asset_type(self):
         result = {
