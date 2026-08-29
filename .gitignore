@@ -12,3 +12,4 @@ __pycache__/
 07_Logs/*backup*.py
 .playwright-cli/
 03_Assets/screenshots/dashboard-empty.png
+07_Logs/backups/
