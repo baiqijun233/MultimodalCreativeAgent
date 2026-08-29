@@ -72,6 +72,24 @@ class TaskStore:
             return None
         return TaskRecord(row["task_id"], row["task_type"], row["status"], json.loads(row["state_json"]), row["updated_at"])
 
+    def list_records(self, limit: int = 100) -> list[TaskRecord]:
+        """按最近更新时间返回任务，供控制台和清理任务使用。"""
+        if not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit 必须是 1 到 1000 的整数")
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM tasks ORDER BY updated_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [TaskRecord(row["task_id"], row["task_type"], row["status"], json.loads(row["state_json"]), row["updated_at"]) for row in rows]
+
+    def delete(self, task_id: str) -> bool:
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValueError("task_id 必须是非空字符串")
+        with self._lock:
+            cursor = self._connection.execute("DELETE FROM tasks WHERE task_id = ?", (task_id.strip(),))
+            self._connection.commit()
+        return cursor.rowcount > 0
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()

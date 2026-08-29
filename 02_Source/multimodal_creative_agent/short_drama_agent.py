@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -202,9 +203,11 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
     try:
         from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
         from fastapi.responses import FileResponse
+        from fastapi.responses import HTMLResponse, Response
         from pydantic import BaseModel, Field
         from integrations.artclaw import ArtClawClient, normalize_reference_urls
         from integrations.image_provider import ImageProviderClient
+        from dashboard import DASHBOARD_HTML
     except ImportError as exc:
         raise RuntimeError("安装 fastapi 和 pydantic 后才能启用 HTTP 接口") from exc
 
@@ -229,9 +232,22 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         max_new_images: int = Field(default=4, ge=1, le=10)
         confirm_paid: bool = False
 
+    class CleanupRequest(BaseModel):
+        older_than_days: int = Field(default=30, ge=1, le=3650)
+        dry_run: bool = True
+        confirm_delete: bool = False
+
     app = FastAPI(title="Multimodal Agent Demo")
     artclaw_submit_lock = threading.Lock()
     image_generate_lock = threading.Lock()
+
+    @app.get("/", response_class=HTMLResponse)
+    def dashboard():
+        return HTMLResponse(DASHBOARD_HTML)
+
+    @app.get("/favicon.ico")
+    def favicon():
+        return Response(status_code=204)
 
     def get_artclaw_client() -> ArtClawClient:
         return ArtClawClient()
@@ -670,6 +686,57 @@ def create_fastapi_app(agent: ShortDramaAgent, runner: Any | None = None):
         if agent.store.get(task_id) is None:
             raise HTTPException(status_code=404, detail="任务不存在")
         return {"task_id": task_id, "events": agent.event_bus.list_events(task_id)}
+
+    @app.get("/tasks")
+    def list_tasks(limit: int = 50):
+        try:
+            records = agent.store.list_records(limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "tasks": [
+                {
+                    "task_id": record.task_id,
+                    "task_type": record.task_type,
+                    "status": record.status,
+                    "request": record.state.get("request", ""),
+                    "updated_at": record.updated_at,
+                    "image_asset_count": len(record.state.get("image_assets", [])) if isinstance(record.state.get("image_assets", []), list) else 0,
+                    "artclaw_job_count": len(record.state.get("artclaw_jobs", [])) if isinstance(record.state.get("artclaw_jobs", []), list) else 0,
+                }
+                for record in records
+            ]
+        }
+
+    @app.post("/maintenance/cleanup")
+    def cleanup_tasks(body: CleanupRequest):
+        if not body.dry_run and body.confirm_delete is not True:
+            raise HTTPException(status_code=400, detail="实际删除必须同时设置 dry_run=false 和 confirm_delete=true")
+        cutoff = datetime.now(timezone.utc) - timedelta(days=body.older_than_days)
+        candidates = []
+        for record in agent.store.list_records(1000):
+            try:
+                updated_at = datetime.fromisoformat(record.updated_at.replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            if updated_at < cutoff:
+                candidates.append(record)
+        removed = []
+        if not body.dry_run:
+            for record in candidates:
+                asset_removed = agent.asset_store.remove_task_directory(record.task_id) if agent.asset_store is not None else False
+                task_removed = agent.store.delete(record.task_id)
+                if task_removed:
+                    removed.append({"task_id": record.task_id, "asset_directory_removed": asset_removed})
+        return {
+            "dry_run": body.dry_run,
+            "older_than_days": body.older_than_days,
+            "candidate_count": len(candidates),
+            "candidates": [{"task_id": record.task_id, "status": record.status, "updated_at": record.updated_at} for record in candidates],
+            "removed": removed,
+        }
 
     @app.post("/tasks/async")
     def create_async_task(body: CreateRequest):

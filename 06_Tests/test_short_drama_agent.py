@@ -395,6 +395,10 @@ class ShortDramaAgentTests(unittest.TestCase):
         app = create_fastapi_app(agent)
         paths = {route.path for route in app.routes}
         self.assertIn("/health", paths)
+        self.assertIn("/", paths)
+        self.assertIn("/favicon.ico", paths)
+        self.assertIn("/tasks", paths)
+        self.assertIn("/maintenance/cleanup", paths)
         self.assertIn("/tasks/{task_id}/events", paths)
         self.assertIn("/ws/tasks/{task_id}", paths)
         self.assertIn("/artclaw/videos", paths)
@@ -598,6 +602,46 @@ class ShortDramaAgentTests(unittest.TestCase):
             client = TestClient(create_fastapi_app(agent))
             response = client.get(f"/tasks/{task_id}/image-assets/escape")
             self.assertEqual(response.status_code, 403)
+            store.close()
+
+    def test_task_list_and_cleanup_default_to_safe_preview(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:
+            self.skipTest("未安装 FastAPI TestClient 依赖")
+        from datetime import datetime, timedelta, timezone
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = TaskStore(root / "tasks.db")
+            asset_store = LocalAssetStore(root / "assets")
+            agent = ShortDramaAgent(store=store, asset_store=asset_store)
+            task = agent.create_task("清理测试任务")
+            old_record = store.get(task.task_id)
+            old_record.status = "succeeded"
+            old_record.updated_at = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+            old_record.state["image_assets"] = []
+            store.save(old_record)
+            (asset_store.root / task.task_id).mkdir(parents=True)
+            (asset_store.root / "orphan").mkdir(parents=True)
+            client = TestClient(create_fastapi_app(agent))
+            listed = client.get("/tasks?limit=10")
+            self.assertEqual(listed.status_code, 200)
+            self.assertEqual(listed.json()["tasks"][0]["task_id"], task.task_id)
+            preview = client.post("/maintenance/cleanup", json={"older_than_days": 30})
+            self.assertEqual(preview.status_code, 200)
+            self.assertEqual(preview.json()["candidate_count"], 1)
+            self.assertTrue(store.get(task.task_id))
+            self.assertTrue((asset_store.root / task.task_id).exists())
+            blocked = client.post("/maintenance/cleanup", json={"older_than_days": 30, "dry_run": False})
+            self.assertEqual(blocked.status_code, 400)
+            removed = client.post(
+                "/maintenance/cleanup",
+                json={"older_than_days": 30, "dry_run": False, "confirm_delete": True},
+            )
+            self.assertEqual(removed.status_code, 200)
+            self.assertIsNone(store.get(task.task_id))
+            self.assertFalse((asset_store.root / task.task_id).exists())
+            self.assertTrue((asset_store.root / "orphan").exists())
             store.close()
 
     def test_image_generation_failure_keeps_main_task_and_resumes_remaining_assets(self):

@@ -46,7 +46,7 @@ ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）�
 [Environment]::SetEnvironmentVariable("IMAGE_API_MODEL", "gpt-image-2", "User")
 ```
 
-服务地址、鉴权方式和响应格式必须以实际供应商文档为准。当前已用本机兼容 HTTP 服务完成请求、响应、图片落盘和断点续跑验证；由于尚未取得云飞服务的准确协议，本项目不宣称已完成云飞真实账号调用。
+服务地址、鉴权方式和响应格式以实际供应商文档为准。云飞图片接口已完成正式使用接入；当前电脑没有可用密钥，因此本轮只做本机兼容链路复核，不重复调用云飞服务。
 
 ## 独立运行与真实规划
 
@@ -80,6 +80,9 @@ Docker 启动（脚本会主动读取当前用户环境变量，避免旧 PowerS
 - `POST /tasks/{task_id}/image-generate`：按批次生成可选图片资产；必须包含 `confirm_paid: true`，已成功项不会重复生成。
 - `GET /tasks/{task_id}/image-assets`：查看已保存的本地图片资产元数据。
 - `GET /tasks/{task_id}/image-assets/{asset_key}`：读取当前任务目录中的单张已保存图片；接口会拒绝目录外路径。
+- `GET /`：打开本地创作工作台，可创建任务、查看状态、查看图片和预览清理结果。
+- `GET /tasks`：按更新时间查看任务列表。
+- `POST /maintenance/cleanup`：预览或确认清理过期任务及其资产目录。
 
 `GET /health` 会返回 `model_provider`（`deepseek` 或 `offline`）、`model_name`、`artclaw_configured` 和 `image_provider_configured`，可用于确认独立运行时实际采用的模型和外部服务配置，不会返回密钥。
 
