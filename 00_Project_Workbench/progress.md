@@ -194,3 +194,10 @@
 - 视频保存为 `08_Deliverables/formal_production_artclaw_5245e956.mp4`，媒体探针确认 H.264、496x864、24fps、4.041667 秒、无音频，首帧视觉检查通过。
 - ArtClaw 可用额度从 68 降至 44，消耗 24 点；SQLite `usage_audit` 已记录本次成功提交。
 - 本轮未调用图片生成，未提交其他分镜；完整证据见 `07_Logs/formal_production_acceptance_20260829.json`。
+
+## 2026-08-30 - 跨项目问题复盘沉淀
+
+- 已将本项目从开发、正式接口验收到 GitHub 公开发布过程中暴露的通用问题，集中写入全局 `00_Global_Workbench/01_Compounding_Pitfall_Log.md`。
+- 新增可复用规则覆盖：大模型结构化输出校验、Celery 重试状态、付费接口幂等与额度审计、Cloudflare 403 排查、Docker 就绪/路径/持久化、API 与 Worker 配置一致性、干净 CI 依赖约束、Windows Playwright 入口、公开仓库验收和精简镜像媒体检查。
+- 修改前备份保存在 `07_Logs/global_pitfall_log_backup_20260830_095014.md` 与 `07_Logs/progress_backup_20260830_095014.md`，可直接回退。
+- 本轮只修改知识与进度文档，不改业务代码、不调用外部付费接口、不产生额度消耗。
