@@ -279,7 +279,7 @@ class ShortDramaAgentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "远程服务无法读取本地参考图"):
                 client.submit_video(
                     "生成一个镜头",
-                    [r"E:\Agent\character.png"],
+                    [r"C:\temp\character.png"],
                     allow_paid=True,
                 )
             self.assertEqual(opener.calls, [])

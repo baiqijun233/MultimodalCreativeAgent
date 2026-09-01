@@ -13,3 +13,9 @@ __pycache__/
 .playwright-cli/
 03_Assets/screenshots/dashboard-empty.png
 07_Logs/backups/
+
+# Internal planning, logs and delivery artifacts are kept outside the public repository
+00_Project_Workbench/
+01_Requirements/
+07_Logs/
+08_Deliverables/

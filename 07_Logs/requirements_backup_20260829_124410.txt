@@ -1,4 +1,0 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-redis>=5.0
-celery>=5.4

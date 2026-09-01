@@ -53,7 +53,7 @@ ArtClaw 配置只从 `ARTCLAW_API_KEY_ACCOUNT_A`（兼容 `ARTCLAW_API_KEY`）�
 DeepSeek 是默认规划模型。平台优先读取用户环境变量 `DEEPSEEK_API_KEY`，将需求解析和分镜规划交给 DeepSeek；未设置时自动使用离线模型，平台仍可启动。若要临时强制离线模式，可设置 `MODEL_PROVIDER=offline`；正常使用不需要设置该变量。
 
 ```powershell
-Set-Location E:\Agent\AIProjects\Project025_MultimodalCreativeAgent\02_Source
+Set-Location 02_Source
 .\run_platform.ps1
 ```
 
