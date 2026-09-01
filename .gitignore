@@ -17,5 +17,6 @@ __pycache__/
 # Internal planning, logs and delivery artifacts are kept outside the public repository
 00_Project_Workbench/
 01_Requirements/
+05_Docs/
 07_Logs/
 08_Deliverables/
