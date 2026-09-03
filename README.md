@@ -25,7 +25,7 @@
 
 MultimodalCreativeAgent 面向短剧、广告和内容团队的创作任务管理。系统将自然语言需求拆成角色、场景和分镜计划，经过结构化校验后进入异步任务队列，并保留阶段状态、失败重试和资产元数据。
 
-> **当前版本 · v0.1.0**：35 项自动化测试通过；网页控制台、异步 Worker、失败恢复、付费调用保护和持久化链路均已完成本机验证。外部生成服务按需配置，离线模式可以独立验证任务流程。
+> **当前版本 · v0.1.1**：35 项自动化测试通过；网页控制台已升级为电影创作工作站视觉，异步 Worker、失败恢复、付费调用保护和持久化链路均已完成本机验证。外部生成服务按需配置，离线模式可以独立验证任务流程。
 
 <a id="project-preview"></a>
 
@@ -33,12 +33,12 @@ MultimodalCreativeAgent 面向短剧、广告和内容团队的创作任务管�
 
 <table>
   <tr>
-    <td width="50%"><strong>桌面控制台</strong><br><img src="03_Assets/screenshots/dashboard-desktop.png" alt="桌面创作控制台"></td>
-    <td width="50%"><strong>移动端控制台</strong><br><img src="03_Assets/screenshots/dashboard-mobile.png" alt="移动端创作控制台"></td>
+    <td width="50%"><strong>桌面控制台 · 电影创作工作站</strong><br><img src="03_Assets/screenshots/dashboard-cinematic-desktop.png" alt="电影风格桌面创作控制台"></td>
+    <td width="50%"><strong>移动端控制台 · 响应式任务卡片</strong><br><img src="03_Assets/screenshots/dashboard-cinematic-mobile.png" alt="电影风格移动端创作控制台"></td>
   </tr>
 </table>
 
-截图来自本地运行的控制台，展示任务创建、状态查看和资产预览流程。
+截图来自本地运行的控制台，展示任务创建、状态查看、响应式任务队列和资产预览流程。
 
 <a id="features"></a>
 
@@ -102,11 +102,11 @@ Set-Location 02_Source
 
 ## 📦 已发布版本
 
-- Release：[MultimodalCreativeAgent v0.1.0](https://github.com/baiqijun233/MultimodalCreativeAgent/releases/tag/v0.1.0)
+- Release：[MultimodalCreativeAgent v0.1.1](https://github.com/baiqijun233/MultimodalCreativeAgent/releases/tag/v0.1.1)
 - Container：`ghcr.io/baiqijun233/multimodalcreativeagent`
 
 ```powershell
-docker pull ghcr.io/baiqijun233/multimodalcreativeagent:0.1.0
+docker pull ghcr.io/baiqijun233/multimodalcreativeagent:0.1.1
 docker pull ghcr.io/baiqijun233/multimodalcreativeagent:latest
 ```
 

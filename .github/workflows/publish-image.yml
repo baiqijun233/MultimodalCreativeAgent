@@ -21,6 +21,15 @@ jobs:
         uses: actions/checkout@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Resolve image version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=build-check" >> "$GITHUB_OUTPUT"
+          fi
       - name: Log in to GHCR for tag pushes
         if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v3
@@ -35,5 +44,5 @@ jobs:
           file: 02_Source/Dockerfile
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ startsWith(github.ref, 'refs/tags/v') && '0.1.0' || 'build-check' }}
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
             ${{ env.IMAGE_NAME }}:latest
